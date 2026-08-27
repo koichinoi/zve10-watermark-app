@@ -27,6 +27,9 @@ type PhotoMeta = {
   date: string;
 };
 
+type ParameterKey = Exclude<keyof PhotoMeta, 'make' | 'model'>;
+type ParameterVisibility = Record<ParameterKey, boolean>;
+
 type LoadedImage = {
   source: CanvasImageSource;
   width: number;
@@ -128,7 +131,42 @@ const fields: Array<{ key: keyof PhotoMeta; label: string; wide?: boolean }> = [
   { key: 'metering', label: '测光模式' },
   { key: 'distance', label: '目标距离' },
   { key: 'flash', label: '闪光灯模式', wide: true },
+  { key: 'date', label: '拍摄时间', wide: true },
 ];
+
+const parameterOptions: Array<{ key: ParameterKey; label: string }> = [
+  { key: 'lens', label: '镜头' },
+  { key: 'focal', label: '焦距' },
+  { key: 'aperture', label: '光圈' },
+  { key: 'exposure', label: '快门' },
+  { key: 'iso', label: 'ISO' },
+  { key: 'exposureCompensation', label: '曝光补偿' },
+  { key: 'maxAperture', label: '最大光圈' },
+  { key: 'focal35', label: '35mm 等效' },
+  { key: 'metering', label: '测光' },
+  { key: 'distance', label: '目标距离' },
+  { key: 'flash', label: '闪光灯' },
+  { key: 'date', label: '拍摄时间' },
+];
+
+const defaultParameterVisibility: ParameterVisibility = {
+  aperture: true,
+  exposure: true,
+  exposureCompensation: true,
+  iso: true,
+  lens: true,
+  focal: true,
+  maxAperture: true,
+  metering: true,
+  distance: true,
+  flash: true,
+  focal35: true,
+  date: true,
+};
+
+function enabledValues(visibility: ParameterVisibility, values: Array<[ParameterKey, string]>) {
+  return values.filter(([key, value]) => visibility[key] && value.trim()).map(([, value]) => value);
+}
 
 function finiteNumber(value: unknown): number | null {
   const number = typeof value === 'number' ? value : Number(value);
@@ -415,6 +453,7 @@ function drawWatermark(
   signature: string,
   accentColor: string,
   layoutMode: LayoutMode,
+  visibility: ParameterVisibility,
 ) {
   const width = image.width;
   // Keep the watermark visually consistent when the same sensor image is rotated.
@@ -475,7 +514,7 @@ function drawWatermark(
     ctx.fillText(`${meta.make}  ${meta.model}`, textX, brandRow, topMaxWidth);
     ctx.fillStyle = muted;
     ctx.font = `500 ${smallSize}px Arial, sans-serif`;
-    ctx.fillText(shorten(meta.lens), textX, lensRow, topMaxWidth);
+    if (visibility.lens) ctx.fillText(shorten(meta.lens), textX, lensRow, topMaxWidth);
     if (topDetail) {
       ctx.font = `600 ${tinySize}px Arial, sans-serif`;
       ctx.fillText(topDetail, textX, signatureRow, topMaxWidth);
@@ -485,17 +524,33 @@ function drawWatermark(
     const secondaryRow = mainRow + smallSize * 1.45;
     const detailRow = secondaryRow + tinySize * 1.35;
     const centeredMaxWidth = width - portraitPad * 2;
+    const mainText = enabledValues(visibility, [
+      ['focal', meta.focal],
+      ['aperture', meta.aperture],
+      ['exposure', meta.exposure],
+      ['iso', meta.iso],
+    ]).join('   ·   ');
+    const secondaryText = enabledValues(visibility, [
+      ['maxAperture', `最大光圈 ${meta.maxAperture}`],
+      ['focal35', `35mm 等效 ${meta.focal35}`],
+      ['metering', meta.metering],
+    ]).join('  ·  ');
     ctx.textAlign = 'center';
     ctx.fillStyle = primary;
     ctx.font = `700 ${mainSize}px Arial, sans-serif`;
-    ctx.fillText(`${meta.focal}   ·   ${meta.aperture}   ·   ${meta.exposure}   ·   ${meta.iso}`, width / 2, mainRow, centeredMaxWidth);
+    if (mainText) ctx.fillText(mainText, width / 2, mainRow, centeredMaxWidth);
     ctx.fillStyle = muted;
     ctx.font = `500 ${smallSize}px Arial, sans-serif`;
-    ctx.fillText(`最大光圈 ${meta.maxAperture}  ·  35mm 等效 ${meta.focal35}  ·  ${meta.metering}`, width / 2, secondaryRow, centeredMaxWidth);
+    if (secondaryText) ctx.fillText(secondaryText, width / 2, secondaryRow, centeredMaxWidth);
     if (detailMode === 'full') {
-      const detailText = [meta.date, meta.exposureCompensation, meta.flash].filter((value) => value && value !== '—').join('  ·  ');
+      const detailText = enabledValues(visibility, [
+        ['date', meta.date],
+        ['exposureCompensation', meta.exposureCompensation],
+        ['distance', `目标距离 ${meta.distance}`],
+        ['flash', meta.flash],
+      ]).filter((value) => value && value !== '—').join('  ·  ');
       ctx.font = `500 ${tinySize}px Arial, sans-serif`;
-      ctx.fillText(detailText || '—', width / 2, detailRow, centeredMaxWidth);
+      if (detailText) ctx.fillText(detailText, width / 2, detailRow, centeredMaxWidth);
     }
     return;
   }
@@ -514,7 +569,7 @@ function drawWatermark(
   const brandSize = Math.max(12, Math.min(scaleBase * 0.0225, width * 0.032, bandHeight * 0.24));
   const smallSize = Math.max(8, Math.min(scaleBase * 0.0115, width * 0.017, bandHeight * 0.12));
   const tinySize = Math.max(7, Math.min(scaleBase * 0.0098, width * 0.015, bandHeight * 0.1));
-  const leftDetail = [signature.trim(), meta.date].filter(Boolean).join('  ·  ');
+  const leftDetail = [signature.trim(), visibility.date ? meta.date : ''].filter(Boolean).join('  ·  ');
   const hasDetailRow = detailMode === 'full' || Boolean(leftDetail);
   const contentHeight = brandSize + smallSize * 1.5 + (hasDetailRow ? tinySize * 1.5 : 0);
   const contentTop = y0 + (bandHeight - contentHeight) / 2;
@@ -529,7 +584,7 @@ function drawWatermark(
   ctx.fillText(`${meta.make}  ${meta.model}`, textX, primaryRow, leftMaxWidth);
   ctx.fillStyle = muted;
   ctx.font = `500 ${smallSize}px Arial, sans-serif`;
-  ctx.fillText(shorten(meta.lens), textX, secondaryRow, leftMaxWidth);
+  if (visibility.lens) ctx.fillText(shorten(meta.lens), textX, secondaryRow, leftMaxWidth);
   if (leftDetail) {
     ctx.font = `500 ${tinySize}px Arial, sans-serif`;
     ctx.fillText(leftDetail, textX, detailRow, leftMaxWidth);
@@ -540,16 +595,29 @@ function drawWatermark(
   ctx.textAlign = 'right';
   ctx.fillStyle = primary;
   ctx.font = `700 ${Math.max(16, Math.min(scaleBase * 0.0205, width * 0.032))}px Arial, sans-serif`;
-  ctx.fillText(`${meta.focal}   ·   ${meta.aperture}   ·   ${meta.exposure}   ·   ${meta.iso}`, rightX, primaryRow, rightMaxWidth);
+  const mainText = enabledValues(visibility, [
+    ['focal', meta.focal],
+    ['aperture', meta.aperture],
+    ['exposure', meta.exposure],
+    ['iso', meta.iso],
+  ]).join('   ·   ');
+  if (mainText) ctx.fillText(mainText, rightX, primaryRow, rightMaxWidth);
   ctx.fillStyle = muted;
   ctx.font = `500 ${smallSize}px Arial, sans-serif`;
-  const secondLine = detailMode === 'full'
-    ? `最大光圈 ${meta.maxAperture}  ·  35mm 等效 ${meta.focal35}  ·  ${meta.metering}`
-    : `35mm 等效 ${meta.focal35}  ·  ${meta.metering}`;
-  ctx.fillText(secondLine, rightX, secondaryRow, rightMaxWidth);
+  const secondLine = enabledValues(visibility, [
+    ...(detailMode === 'full' ? [['maxAperture', `最大光圈 ${meta.maxAperture}`] as [ParameterKey, string]] : []),
+    ['focal35', `35mm 等效 ${meta.focal35}`],
+    ['metering', meta.metering],
+  ]).join('  ·  ');
+  if (secondLine) ctx.fillText(secondLine, rightX, secondaryRow, rightMaxWidth);
   if (detailMode === 'full') {
     ctx.font = `500 ${tinySize}px Arial, sans-serif`;
-    ctx.fillText(`${meta.exposureCompensation}  ·  目标距离 ${meta.distance}  ·  ${meta.flash}`, rightX, detailRow, rightMaxWidth);
+    const detailText = enabledValues(visibility, [
+      ['exposureCompensation', meta.exposureCompensation],
+      ['distance', `目标距离 ${meta.distance}`],
+      ['flash', meta.flash],
+    ]).join('  ·  ');
+    if (detailText) ctx.fillText(detailText, rightX, detailRow, rightMaxWidth);
   }
 }
 
@@ -566,6 +634,7 @@ export default function Home() {
   const [watermarkHeight, setWatermarkHeight] = useState(12.5);
   const [signature, setSignature] = useState('');
   const [accentColor, setAccentColor] = useState('#e11d2e');
+  const [parameterVisibility, setParameterVisibility] = useState<ParameterVisibility>(defaultParameterVisibility);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [cameraAsset, setCameraAsset] = useState<HTMLImageElement | null>(null);
   const [busy, setBusy] = useState(false);
@@ -579,9 +648,9 @@ export default function Home() {
 
   useEffect(() => {
     if (loaded && canvasRef.current) {
-      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode);
+      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode, parameterVisibility);
     }
-  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode]);
+  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode, parameterVisibility]);
 
   useEffect(() => {
     let active = true;
@@ -697,7 +766,7 @@ export default function Home() {
         const result = await readPhotoFile(file);
         batchImage = result.image;
         const outputCanvas = document.createElement('canvas');
-        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode);
+        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode, parameterVisibility);
         const blob = await canvasToBlob(outputCanvas, exportFormat);
         const base = file.name.replace(/\.[^.]+$/, '');
         const sequence = String(index + 1).padStart(3, '0');
@@ -728,6 +797,11 @@ export default function Home() {
   };
 
   const download = () => batchFiles.length > 1 ? downloadBatch() : downloadSingle();
+  const allParametersVisible = parameterOptions.every(({ key }) => parameterVisibility[key]);
+
+  const setAllParameters = (visible: boolean) => {
+    setParameterVisibility(Object.fromEntries(parameterOptions.map(({ key }) => [key, visible])) as ParameterVisibility);
+  };
 
   return (
     <main className="app-shell">
@@ -835,6 +909,23 @@ export default function Home() {
               <input type="color" value={accentColor} onChange={(event) => setAccentColor(event.target.value)} aria-label="自定义强调色" />
               <span>＋</span>
             </label>
+          </div>
+
+          <div className="setting-label parameter-heading">
+            <span>参数显示</span>
+            <button onClick={() => setAllParameters(!allParametersVisible)}>{allParametersVisible ? '全部隐藏' : '全部显示'}</button>
+          </div>
+          <div className="parameter-switches">
+            {parameterOptions.map(({ key, label }) => (
+              <label key={key}>
+                <span>{label}</span>
+                <input
+                  type="checkbox"
+                  checked={parameterVisibility[key]}
+                  onChange={(event) => setParameterVisibility((current) => ({ ...current, [key]: event.target.checked }))}
+                />
+              </label>
+            ))}
           </div>
 
           <label className="setting-label range-label"><span>水印高度</span><strong>{watermarkHeight.toFixed(1)}%</strong></label>
