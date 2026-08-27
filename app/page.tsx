@@ -402,7 +402,10 @@ function drawWatermark(
   cameraAsset: HTMLImageElement | null,
 ) {
   const width = image.width;
-  const bandHeight = Math.max(72, Math.round(width * heightPercent / 100));
+  // Keep the watermark visually consistent when the same sensor image is rotated.
+  // Portrait photos otherwise used the short edge here and produced a much smaller band.
+  const scaleBase = Math.max(image.width, image.height);
+  const bandHeight = Math.max(72, Math.round(scaleBase * heightPercent / 100));
   const canvasHeight = image.height + bandHeight;
   canvas.width = width;
   canvas.height = canvasHeight;
@@ -432,9 +435,9 @@ function drawWatermark(
   ctx.fillRect(dividerX, y0 + (bandHeight - dividerHeight) / 2, Math.max(3, width * 0.001), dividerHeight);
 
   const textX = dividerX + width * 0.023;
-  const brandSize = Math.max(12, Math.min(width * 0.0225, bandHeight * 0.24));
-  const smallSize = Math.max(8, Math.min(width * 0.0115, bandHeight * 0.12));
-  const tinySize = Math.max(7, Math.min(width * 0.0098, bandHeight * 0.1));
+  const brandSize = Math.max(12, Math.min(scaleBase * 0.0225, width * 0.032, bandHeight * 0.24));
+  const smallSize = Math.max(8, Math.min(scaleBase * 0.0115, width * 0.017, bandHeight * 0.12));
+  const tinySize = Math.max(7, Math.min(scaleBase * 0.0098, width * 0.015, bandHeight * 0.1));
   const contentHeight = brandSize + smallSize * 1.5 + (detailMode === 'full' ? tinySize * 1.5 : 0);
   const contentTop = y0 + (bandHeight - contentHeight) / 2;
   const primaryRow = contentTop + brandSize;
@@ -444,29 +447,31 @@ function drawWatermark(
   ctx.textAlign = 'left';
   ctx.fillStyle = primary;
   ctx.font = `700 ${brandSize}px Arial, sans-serif`;
-  ctx.fillText(`${meta.make}  ${meta.model}`, textX, primaryRow);
+  const leftMaxWidth = Math.max(width * 0.2, width * 0.48 - textX);
+  ctx.fillText(`${meta.make}  ${meta.model}`, textX, primaryRow, leftMaxWidth);
   ctx.fillStyle = muted;
   ctx.font = `500 ${smallSize}px Arial, sans-serif`;
-  ctx.fillText(shorten(meta.lens), textX, secondaryRow);
+  ctx.fillText(shorten(meta.lens), textX, secondaryRow, leftMaxWidth);
   if (detailMode === 'full' && meta.date) {
     ctx.font = `500 ${tinySize}px Arial, sans-serif`;
     ctx.fillText(meta.date, textX, detailRow, width * 0.38);
   }
 
   const rightX = width - padX;
+  const rightMaxWidth = width * 0.48;
   ctx.textAlign = 'right';
   ctx.fillStyle = primary;
-  ctx.font = `700 ${Math.max(16, width * 0.0205)}px Arial, sans-serif`;
-  ctx.fillText(`${meta.focal}   ·   ${meta.aperture}   ·   ${meta.exposure}   ·   ${meta.iso}`, rightX, primaryRow);
+  ctx.font = `700 ${Math.max(16, Math.min(scaleBase * 0.0205, width * 0.032))}px Arial, sans-serif`;
+  ctx.fillText(`${meta.focal}   ·   ${meta.aperture}   ·   ${meta.exposure}   ·   ${meta.iso}`, rightX, primaryRow, rightMaxWidth);
   ctx.fillStyle = muted;
   ctx.font = `500 ${smallSize}px Arial, sans-serif`;
   const secondLine = detailMode === 'full'
     ? `最大光圈 ${meta.maxAperture}  ·  35mm 等效 ${meta.focal35}  ·  ${meta.metering}`
     : `35mm 等效 ${meta.focal35}  ·  ${meta.metering}`;
-  ctx.fillText(secondLine, rightX, secondaryRow);
+  ctx.fillText(secondLine, rightX, secondaryRow, rightMaxWidth);
   if (detailMode === 'full') {
     ctx.font = `500 ${tinySize}px Arial, sans-serif`;
-    ctx.fillText(`目标距离 ${meta.distance}  ·  ${meta.flash}`, rightX, detailRow);
+    ctx.fillText(`目标距离 ${meta.distance}  ·  ${meta.flash}`, rightX, detailRow, rightMaxWidth);
   }
 }
 
