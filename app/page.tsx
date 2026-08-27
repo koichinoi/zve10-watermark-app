@@ -1,0 +1,500 @@
+'use client';
+
+import exifr from 'exifr';
+import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from 'react';
+
+type WatermarkTheme = 'light' | 'dark';
+type DetailMode = 'full' | 'compact';
+
+type PhotoMeta = {
+  make: string;
+  model: string;
+  aperture: string;
+  exposure: string;
+  iso: string;
+  lens: string;
+  focal: string;
+  maxAperture: string;
+  metering: string;
+  distance: string;
+  flash: string;
+  focal35: string;
+  date: string;
+};
+
+type LoadedImage = {
+  source: CanvasImageSource;
+  width: number;
+  height: number;
+  name: string;
+  rawPreview: boolean;
+  cleanup?: () => void;
+};
+
+const demoMeta: PhotoMeta = {
+  make: 'SONY',
+  model: 'ZV-E10 II',
+  aperture: 'f/4.5',
+  exposure: '1/125s',
+  iso: 'ISO 400',
+  lens: 'E PZ 16-50mm F3.5-5.6 OSS II',
+  focal: '26mm',
+  maxAperture: 'f/4.5',
+  metering: '图案测光',
+  distance: '—',
+  flash: '无闪光，强制',
+  focal35: '39mm',
+  date: '',
+};
+
+const fields: Array<{ key: keyof PhotoMeta; label: string; wide?: boolean }> = [
+  { key: 'make', label: '相机制造商' },
+  { key: 'model', label: '相机型号' },
+  { key: 'aperture', label: '光圈值' },
+  { key: 'exposure', label: '曝光时间' },
+  { key: 'iso', label: 'ISO 速度' },
+  { key: 'focal', label: '焦距' },
+  { key: 'lens', label: '镜头', wide: true },
+  { key: 'maxAperture', label: '最大光圈' },
+  { key: 'focal35', label: '35mm 等效' },
+  { key: 'metering', label: '测光模式' },
+  { key: 'distance', label: '目标距离' },
+  { key: 'flash', label: '闪光灯模式', wide: true },
+];
+
+function finiteNumber(value: unknown): number | null {
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function trimNumber(value: number, digits = 1) {
+  return value.toFixed(digits).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+function formatAperture(value: unknown) {
+  const number = finiteNumber(value);
+  return number ? `f/${trimNumber(number)}` : '—';
+}
+
+function formatMaxAperture(value: unknown) {
+  const apex = finiteNumber(value);
+  if (!apex) return '—';
+  return `f/${trimNumber(Math.pow(2, apex / 2))}`;
+}
+
+function formatExposure(value: unknown) {
+  const seconds = finiteNumber(value);
+  if (!seconds || seconds <= 0) return '—';
+  if (seconds < 1) return `1/${Math.round(1 / seconds)}s`;
+  return `${trimNumber(seconds, 2)}s`;
+}
+
+function formatMillimeters(value: unknown) {
+  const number = finiteNumber(value);
+  return number === null ? '—' : `${trimNumber(number)}mm`;
+}
+
+function normalizeModel(value: unknown) {
+  const model = String(value || '').trim();
+  if (/ZV-E10M2/i.test(model)) return 'ZV-E10 II';
+  return model || '—';
+}
+
+function formatLens(data: Record<string, unknown>) {
+  const direct = String(data.LensModel || data.Lens || '').trim();
+  if (direct) return direct;
+  const info = data.LensInfo;
+  if (Array.isArray(info) && info.length >= 4) {
+    return `${trimNumber(Number(info[2]))}-${trimNumber(Number(info[3]))}mm f/${trimNumber(Number(info[0]))}-${trimNumber(Number(info[1]))}`;
+  }
+  return '—';
+}
+
+function formatMetering(value: unknown) {
+  const text = String(value ?? '').toLowerCase();
+  if (text.includes('pattern') || text === '5') return '图案测光';
+  if (text.includes('center') || text === '2') return '中央重点';
+  if (text.includes('spot') || text === '3' || text === '4') return '点测光';
+  if (text.includes('average') || text === '1') return '平均测光';
+  return value ? String(value) : '—';
+}
+
+function formatFlash(value: unknown) {
+  const text = String(value ?? '').toLowerCase();
+  const number = finiteNumber(value);
+  if (text.includes('did not fire') && (text.includes('compulsory') || text.includes('forced'))) return '无闪光，强制';
+  if (text.includes('did not fire') || number === 0) return '未闪光';
+  if (text.includes('fired') || (number !== null && (number & 1) === 1)) return '闪光灯已闪光';
+  return value ? String(value) : '—';
+}
+
+function formatDistance(value: unknown) {
+  const number = finiteNumber(value);
+  return number === null ? '—' : `${trimNumber(number, 2)}m`;
+}
+
+function formatDate(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return new Intl.DateTimeFormat('zh-CN', {
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(value).replaceAll('/', '.');
+  }
+  return value ? String(value) : '';
+}
+
+function metadataFromExif(data: Record<string, unknown>): PhotoMeta {
+  const iso = data.ISO ?? data.PhotographicSensitivity ?? data.ISOSpeedRatings;
+  const isoNumber = finiteNumber(iso);
+  return {
+    make: String(data.Make || 'SONY').trim().toUpperCase(),
+    model: normalizeModel(data.Model),
+    aperture: formatAperture(data.FNumber ?? data.ApertureValue),
+    exposure: formatExposure(data.ExposureTime),
+    iso: isoNumber === null ? '—' : `ISO ${isoNumber}`,
+    lens: formatLens(data),
+    focal: formatMillimeters(data.FocalLength),
+    maxAperture: formatMaxAperture(data.MaxApertureValue),
+    metering: formatMetering(data.MeteringMode),
+    distance: formatDistance(data.SubjectDistance),
+    flash: formatFlash(data.Flash),
+    focal35: formatMillimeters(data.FocalLengthIn35mmFormat ?? data.FocalLengthIn35mmFilm),
+    date: formatDate(data.DateTimeOriginal ?? data.CreateDate),
+  };
+}
+
+function loadHtmlImage(url: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('无法解码图片'));
+    image.src = url;
+  });
+}
+
+function cameraGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(2, size * 0.045);
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.roundRect(x, y + size * 0.2, size * 1.35, size * 0.78, size * 0.1);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x + size * 0.25, y + size * 0.2);
+  ctx.lineTo(x + size * 0.4, y);
+  ctx.lineTo(x + size * 0.78, y);
+  ctx.lineTo(x + size * 0.92, y + size * 0.2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x + size * 0.7, y + size * 0.59, size * 0.22, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = '#e11d2e';
+  ctx.beginPath();
+  ctx.arc(x + size * 1.12, y + size * 0.39, size * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function shorten(text: string, max = 56) {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function drawWatermark(
+  canvas: HTMLCanvasElement,
+  image: LoadedImage,
+  meta: PhotoMeta,
+  theme: WatermarkTheme,
+  detailMode: DetailMode,
+) {
+  const width = image.width;
+  const bandHeight = Math.max(110, Math.round(width * (detailMode === 'full' ? 0.18 : 0.145)));
+  const canvasHeight = image.height + bandHeight;
+  const maxDimension = 12200;
+  const scaleDown = Math.min(1, maxDimension / Math.max(width, canvasHeight));
+  canvas.width = Math.round(width * scaleDown);
+  canvas.height = Math.round(canvasHeight * scaleDown);
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.scale(scaleDown, scaleDown);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(image.source, 0, 0, width, image.height);
+
+  const background = theme === 'light' ? '#f8f8f6' : '#101113';
+  const primary = theme === 'light' ? '#121316' : '#f7f7f4';
+  const muted = theme === 'light' ? '#62646a' : '#a9abb1';
+  const y0 = image.height;
+  const padX = width * 0.045;
+  const padY = bandHeight * 0.18;
+  ctx.fillStyle = background;
+  ctx.fillRect(0, y0, width, bandHeight);
+
+  const iconSize = bandHeight * 0.33;
+  cameraGlyph(ctx, padX, y0 + padY + bandHeight * 0.04, iconSize, primary);
+  const dividerX = padX + iconSize * 1.7;
+  ctx.fillStyle = '#e11d2e';
+  ctx.fillRect(dividerX, y0 + padY, Math.max(3, width * 0.001), bandHeight - padY * 2);
+
+  const textX = dividerX + width * 0.023;
+  const brandSize = Math.max(18, width * 0.026);
+  const smallSize = Math.max(11, width * 0.0125);
+  const tinySize = Math.max(9, width * 0.0105);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = primary;
+  ctx.font = `700 ${brandSize}px Arial, sans-serif`;
+  ctx.fillText(`${meta.make}  ${meta.model}`, textX, y0 + padY + brandSize);
+  ctx.fillStyle = muted;
+  ctx.font = `500 ${smallSize}px Arial, sans-serif`;
+  ctx.fillText(shorten(meta.lens), textX, y0 + padY + brandSize + smallSize * 1.75);
+  if (meta.date) {
+    ctx.font = `500 ${tinySize}px Arial, sans-serif`;
+    ctx.fillText(meta.date, textX, y0 + bandHeight - padY * 0.7, width * 0.38);
+  }
+
+  const rightX = width - padX;
+  ctx.textAlign = 'right';
+  ctx.fillStyle = primary;
+  ctx.font = `700 ${Math.max(17, width * 0.023)}px Arial, sans-serif`;
+  ctx.fillText(`${meta.focal}   ·   ${meta.aperture}   ·   ${meta.exposure}   ·   ${meta.iso}`, rightX, y0 + padY + brandSize);
+  ctx.fillStyle = muted;
+  ctx.font = `500 ${smallSize}px Arial, sans-serif`;
+  const secondLine = detailMode === 'full'
+    ? `最大光圈 ${meta.maxAperture}  ·  35mm 等效 ${meta.focal35}  ·  ${meta.metering}`
+    : `35mm 等效 ${meta.focal35}  ·  ${meta.metering}`;
+  ctx.fillText(secondLine, rightX, y0 + padY + brandSize + smallSize * 1.75);
+  if (detailMode === 'full') {
+    ctx.font = `500 ${tinySize}px Arial, sans-serif`;
+    ctx.fillText(`目标距离 ${meta.distance}  ·  ${meta.flash}`, rightX, y0 + bandHeight - padY * 0.7);
+  }
+}
+
+export default function Home() {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const loadedRef = useRef<LoadedImage | null>(null);
+  const [loaded, setLoaded] = useState<LoadedImage | null>(null);
+  const [meta, setMeta] = useState<PhotoMeta>(demoMeta);
+  const [theme, setTheme] = useState<WatermarkTheme>('light');
+  const [detailMode, setDetailMode] = useState<DetailMode>('full');
+  const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [status, setStatus] = useState('等待导入照片');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    loadedRef.current = loaded;
+  }, [loaded]);
+
+  useEffect(() => {
+    if (loaded && canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode);
+  }, [loaded, meta, theme, detailMode]);
+
+  useEffect(() => () => loadedRef.current?.cleanup?.(), []);
+
+  const importFile = useCallback(async (file: File) => {
+    if (!file) return;
+    setBusy(true);
+    setError('');
+    setStatus('正在读取照片和 EXIF…');
+    let nextImage: LoadedImage | null = null;
+    try {
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = (await exifr.parse(file, true)) || {};
+      } catch {
+        parsed = {};
+      }
+
+      try {
+        const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+        nextImage = {
+          source: bitmap,
+          width: bitmap.width,
+          height: bitmap.height,
+          name: file.name,
+          rawPreview: false,
+          cleanup: () => bitmap.close(),
+        };
+      } catch {
+        const thumbnailUrl = await exifr.thumbnailUrl(file);
+        if (!thumbnailUrl) throw new Error('这个 RAW 文件没有可用的内嵌预览，请先转成 JPEG 再导入。');
+        const image = await loadHtmlImage(thumbnailUrl);
+        nextImage = {
+          source: image,
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+          name: file.name,
+          rawPreview: true,
+          cleanup: () => URL.revokeObjectURL(thumbnailUrl),
+        };
+      }
+
+      loadedRef.current?.cleanup?.();
+      setLoaded(nextImage);
+      const nextMeta = metadataFromExif(parsed);
+      setMeta(nextMeta);
+      const found = fields.filter(({ key }) => nextMeta[key] !== '—').length;
+      setStatus(nextImage.rawPreview
+        ? `已读取 ${found} 项参数 · ARW 使用内嵌预览图`
+        : `已读取 ${found} 项参数 · 可直接导出`);
+    } catch (reason) {
+      nextImage?.cleanup?.();
+      setError(reason instanceof Error ? reason.message : '读取失败，请换一张原始照片重试。');
+      setStatus('读取失败');
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const chooseFile = () => inputRef.current?.click();
+
+  const onInput = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) void importFile(file);
+    event.target.value = '';
+  };
+
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) void importFile(file);
+  };
+
+  const updateMeta = (key: keyof PhotoMeta, value: string) => {
+    setMeta((current) => ({ ...current, [key]: value }));
+  };
+
+  const download = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !loaded) return;
+    setStatus('正在生成高清 JPEG…');
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        setError('导出失败，请重试。');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      const base = loaded.name.replace(/\.[^.]+$/, '');
+      anchor.download = `${base}_ZVE10II_水印.jpg`;
+      anchor.href = url;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStatus('高清水印照片已导出');
+    }, 'image/jpeg', 0.96);
+  };
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand-mark"><span className="record-dot" />ZE10</div>
+        <div className="topbar-copy">
+          <strong>ZV-E10 II 专属水印工坊</strong>
+          <span>照片仅在本机处理，不会上传</span>
+        </div>
+        <div className="privacy-pill"><span>●</span> 本地模式</div>
+      </header>
+
+      <section className="hero">
+        <div>
+          <p className="eyebrow">SONY ZV-E10 II · PHOTO SIGNATURE</p>
+          <h1>把拍摄参数，<br />变成照片的一部分。</h1>
+          <p className="hero-text">导入原图，自动读取光圈、快门、ISO、焦距、镜头与测光信息。一键生成干净的相机参数水印。</p>
+        </div>
+        <div className="hero-specs" aria-label="示例参数">
+          <span>26mm</span><span>f/4.5</span><span>1/125s</span><span>ISO 400</span>
+        </div>
+      </section>
+
+      <div className="workspace">
+        <aside className="control-panel">
+          <div className="panel-heading">
+            <div><span className="step">01</span><h2>导入照片</h2></div>
+            <span className={`status-dot ${loaded ? 'ready' : ''}`} />
+          </div>
+
+          <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,.arw,.ARW" hidden onChange={onInput} />
+          <div
+            className={`dropzone ${dragging ? 'dragging' : ''} ${loaded ? 'has-file' : ''}`}
+            onClick={chooseFile}
+            onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
+            onDragOver={(event) => event.preventDefault()}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') chooseFile(); }}
+          >
+            <div className="upload-symbol">＋</div>
+            <strong>{loaded ? loaded.name : '点击选择或拖入照片'}</strong>
+            <span>支持 JPG、PNG、WEBP、ARW</span>
+          </div>
+
+          <div className="read-status">
+            <span className={busy ? 'spinner' : 'status-icon'}>{busy ? '' : loaded ? '✓' : 'i'}</span>
+            <p><strong>{status}</strong>{loaded?.rawPreview && <small>需要全分辨率时，请导入由 RAW 转出的 JPEG。</small>}</p>
+          </div>
+          {error && <p className="error-message">{error}</p>}
+
+          <div className="panel-heading settings-heading">
+            <div><span className="step">02</span><h2>水印设置</h2></div>
+          </div>
+          <label className="setting-label">底色</label>
+          <div className="segmented">
+            <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')}>象牙白</button>
+            <button className={theme === 'dark' ? 'active' : ''} onClick={() => setTheme('dark')}>曜石黑</button>
+          </div>
+          <label className="setting-label">信息密度</label>
+          <div className="segmented">
+            <button className={detailMode === 'full' ? 'active' : ''} onClick={() => setDetailMode('full')}>完整参数</button>
+            <button className={detailMode === 'compact' ? 'active' : ''} onClick={() => setDetailMode('compact')}>精简参数</button>
+          </div>
+
+          <button className="export-button" disabled={!loaded || busy} onClick={download}>
+            <span>导出高清照片</span><b>→</b>
+          </button>
+        </aside>
+
+        <section className="preview-panel">
+          <div className="preview-heading">
+            <div><span className="step">03</span><h2>实时预览</h2></div>
+            <span>{loaded ? `${loaded.width} × ${loaded.height}px` : '等待照片'}</span>
+          </div>
+          <div className="preview-stage">
+            {loaded ? (
+              <canvas ref={canvasRef} aria-label="水印照片预览" />
+            ) : (
+              <div className="sample-photo">
+                <div className="sample-scene"><span>YOUR<br />PHOTO</span></div>
+                <div className={`sample-band ${theme}`}>
+                  <div className="sample-camera"><i /><b>ZE10</b></div>
+                  <div className="sample-brand"><strong>SONY&nbsp;&nbsp;ZV-E10 II</strong><span>E PZ 16-50mm F3.5-5.6 OSS II</span></div>
+                  <div className="sample-values"><strong>26mm&nbsp; · &nbsp;f/4.5&nbsp; · &nbsp;1/125s&nbsp; · &nbsp;ISO 400</strong><span>35mm 等效 39mm&nbsp; · &nbsp;图案测光&nbsp; · &nbsp;无闪光，强制</span></div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="metadata-heading">
+            <div><h2>拍摄参数</h2><span>自动读取后仍可手动修改</span></div>
+            <button onClick={() => setMeta(demoMeta)}>填入示例</button>
+          </div>
+          <div className="metadata-grid">
+            {fields.map((field) => (
+              <label key={field.key} className={field.wide ? 'wide' : ''}>
+                <span>{field.label}</span>
+                <input value={meta[field.key]} onChange={(event) => updateMeta(field.key, event.target.value)} />
+              </label>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <footer>BUILT FOR SONY ZV-E10 II <span>·</span> 96% JPEG QUALITY <span>·</span> LOCAL PROCESSING</footer>
+    </main>
+  );
+}
+

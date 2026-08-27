@@ -33,3 +33,4 @@ pnpm run start
 ## RAW 说明
 
 浏览器不能直接显影 ARW。导入 ARW 时，工具会读取 EXIF 并使用文件内嵌的预览图；需要最高分辨率时，请先把 RAW 转成 JPEG 再导入。
+
