@@ -34,6 +34,67 @@ type LoadedImage = {
   cleanup?: () => void;
 };
 
+type DroppedEntry = {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+  file?: (success: (file: File) => void, failure?: (reason: DOMException) => void) => void;
+  createReader?: () => {
+    readEntries: (success: (entries: DroppedEntry[]) => void, failure?: (reason: DOMException) => void) => void;
+  };
+};
+
+const supportedPhotoPattern = /\.(?:jpe?g|png|webp|arw)$/i;
+
+function isSupportedPhoto(file: File) {
+  return supportedPhotoPattern.test(file.name)
+    || /image\/(?:jpeg|png|webp)/i.test(file.type)
+    || /sony.*raw/i.test(file.type);
+}
+
+function fileFromEntry(entry: DroppedEntry) {
+  return new Promise<File>((resolve, reject) => {
+    if (!entry.file) return reject(new Error('无法读取文件'));
+    entry.file(resolve, reject);
+  });
+}
+
+async function entriesFromDirectory(entry: DroppedEntry) {
+  const reader = entry.createReader?.();
+  if (!reader) return [];
+  const entries: DroppedEntry[] = [];
+
+  while (true) {
+    const batch = await new Promise<DroppedEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+    if (!batch.length) break;
+    entries.push(...batch);
+  }
+
+  return entries;
+}
+
+async function filesFromEntry(entry: DroppedEntry): Promise<File[]> {
+  if (entry.isFile) {
+    try {
+      return [await fileFromEntry(entry)];
+    } catch {
+      return [];
+    }
+  }
+  if (!entry.isDirectory) return [];
+  const children = await entriesFromDirectory(entry);
+  return (await Promise.all(children.map(filesFromEntry))).flat();
+}
+
+async function photosFromDrop(entries: DroppedEntry[], fallbackFiles: File[]) {
+  const files = entries.length
+    ? (await Promise.all(entries.map(filesFromEntry))).flat()
+    : fallbackFiles;
+  return files
+    .filter((file) => !file.name.startsWith('.') && isSupportedPhoto(file))
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }));
+}
+
 const demoMeta: PhotoMeta = {
   make: 'SONY',
   model: 'ZV-E10 II',
@@ -174,6 +235,25 @@ function loadHtmlImage(url: string) {
   });
 }
 
+async function loadNativeImageFile(file: File) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const htmlImage = await loadHtmlImage(objectUrl);
+    const image: LoadedImage = {
+      source: htmlImage,
+      width: htmlImage.naturalWidth,
+      height: htmlImage.naturalHeight,
+      name: file.name,
+      rawPreview: false,
+      cleanup: () => URL.revokeObjectURL(objectUrl),
+    };
+    return image;
+  } catch (reason) {
+    URL.revokeObjectURL(objectUrl);
+    throw reason;
+  }
+}
+
 async function readPhotoFile(file: File) {
   let parsed: Record<string, unknown> = {};
   try {
@@ -181,21 +261,57 @@ async function readPhotoFile(file: File) {
   } catch {
     parsed = {};
   }
+  let meta: PhotoMeta;
+  try {
+    meta = metadataFromExif(parsed);
+  } catch {
+    meta = metadataFromExif({});
+  }
+
+  const isRaw = /\.arw$/i.test(file.name) || /sony.*raw/i.test(file.type);
+
+  if (!isRaw) {
+    if (typeof createImageBitmap === 'function') {
+      try {
+        const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+        const image: LoadedImage = {
+          source: bitmap,
+          width: bitmap.width,
+          height: bitmap.height,
+          name: file.name,
+          rawPreview: false,
+          cleanup: () => bitmap.close(),
+        };
+        return { image, meta };
+      } catch {
+        try {
+          const bitmap = await createImageBitmap(file);
+          const image: LoadedImage = {
+            source: bitmap,
+            width: bitmap.width,
+            height: bitmap.height,
+            name: file.name,
+            rawPreview: false,
+            cleanup: () => bitmap.close(),
+          };
+          return { image, meta };
+        } catch {
+          // Continue with the browser's native image decoder below.
+        }
+      }
+    }
+
+    try {
+      const image = await loadNativeImageFile(file);
+      return { image, meta };
+    } catch {
+      throw new Error(`无法读取“${file.name}”，请确认它是完整的 JPG、PNG 或 WEBP 图片。`);
+    }
+  }
 
   try {
-    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    const image: LoadedImage = {
-      source: bitmap,
-      width: bitmap.width,
-      height: bitmap.height,
-      name: file.name,
-      rawPreview: false,
-      cleanup: () => bitmap.close(),
-    };
-    return { image, meta: metadataFromExif(parsed) };
-  } catch {
     const thumbnailUrl = await exifr.thumbnailUrl(file);
-    if (!thumbnailUrl) throw new Error('这个 RAW 文件没有可用的内嵌预览，请先转成 JPEG 再导入。');
+    if (!thumbnailUrl) throw new Error('missing thumbnail');
     const htmlImage = await loadHtmlImage(thumbnailUrl);
     const image: LoadedImage = {
       source: htmlImage,
@@ -205,7 +321,9 @@ async function readPhotoFile(file: File) {
       rawPreview: true,
       cleanup: () => URL.revokeObjectURL(thumbnailUrl),
     };
-    return { image, meta: metadataFromExif(parsed) };
+    return { image, meta };
+  } catch {
+    throw new Error(`无法读取“${file.name}”的 RAW 预览，请先将它转成 JPEG 再导入。`);
   }
 }
 
@@ -415,9 +533,15 @@ export default function Home() {
   }, []);
 
   const importFiles = useCallback(async (files: File[]) => {
-    if (!files.length) return;
-    setBatchFiles(files);
-    await importFile(files[0]);
+    const photos = files.filter(isSupportedPhoto);
+    if (!photos.length) {
+      setBatchFiles([]);
+      setError('没有找到可读取的照片，请导入 JPG、PNG、WEBP 或 ARW 文件。');
+      setStatus('未找到照片');
+      return;
+    }
+    setBatchFiles(photos);
+    await importFile(photos[0]);
   }, [importFile]);
 
   const chooseFile = () => inputRef.current?.click();
@@ -431,8 +555,16 @@ export default function Home() {
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragging(false);
-    const files = Array.from(event.dataTransfer.files || []);
-    if (files.length) void importFiles(files);
+    const fallbackFiles = Array.from(event.dataTransfer.files || []);
+    const entries = Array.from(event.dataTransfer.items || [])
+      .map((item) => (item as DataTransferItem & { webkitGetAsEntry?: () => DroppedEntry | null }).webkitGetAsEntry?.() || null)
+      .filter((entry): entry is DroppedEntry => Boolean(entry));
+    setError('');
+    setStatus(entries.some((entry) => entry.isDirectory) ? '正在扫描文件夹中的照片…' : '正在读取照片…');
+    void photosFromDrop(entries, fallbackFiles).then(importFiles).catch(() => {
+      setError('文件夹读取失败，请打开文件夹后多选照片导入。');
+      setStatus('读取失败');
+    });
   };
 
   const updateMeta = (key: keyof PhotoMeta, value: string) => {
