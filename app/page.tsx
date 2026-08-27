@@ -8,12 +8,14 @@ import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from
 type WatermarkTheme = 'light' | 'dark';
 type DetailMode = 'full' | 'compact';
 type ExportFormat = 'jpeg' | 'png';
+type LayoutMode = 'auto' | 'landscape';
 
 type PhotoMeta = {
   make: string;
   model: string;
   aperture: string;
   exposure: string;
+  exposureCompensation: string;
   iso: string;
   lens: string;
   focal: string;
@@ -100,6 +102,7 @@ const demoMeta: PhotoMeta = {
   model: 'ZV-E10 II',
   aperture: 'f/4.5',
   exposure: '1/125s',
+  exposureCompensation: '±0.0 EV',
   iso: 'ISO 400',
   lens: 'E PZ 16-50mm F3.5-5.6 OSS II',
   focal: '26mm',
@@ -116,6 +119,7 @@ const fields: Array<{ key: keyof PhotoMeta; label: string; wide?: boolean }> = [
   { key: 'model', label: '相机型号' },
   { key: 'aperture', label: '光圈值' },
   { key: 'exposure', label: '曝光时间' },
+  { key: 'exposureCompensation', label: '曝光补偿' },
   { key: 'iso', label: 'ISO 速度' },
   { key: 'focal', label: '焦距' },
   { key: 'lens', label: '镜头', wide: true },
@@ -151,6 +155,13 @@ function formatExposure(value: unknown) {
   if (!seconds || seconds <= 0) return '—';
   if (seconds < 1) return `1/${Math.round(1 / seconds)}s`;
   return `${trimNumber(seconds, 2)}s`;
+}
+
+function formatExposureCompensation(value: unknown) {
+  const number = finiteNumber(value);
+  if (number === null) return value ? String(value) : '—';
+  if (Math.abs(number) < 0.05) return '±0.0 EV';
+  return `${number > 0 ? '+' : ''}${trimNumber(number, 1)} EV`;
 }
 
 function formatMillimeters(value: unknown) {
@@ -214,6 +225,7 @@ function metadataFromExif(data: Record<string, unknown>): PhotoMeta {
     model: normalizeModel(data.Model),
     aperture: formatAperture(data.FNumber ?? data.ApertureValue),
     exposure: formatExposure(data.ExposureTime),
+    exposureCompensation: formatExposureCompensation(data.ExposureCompensation ?? data.ExposureBiasValue),
     iso: isoNumber === null ? '—' : `ISO ${isoNumber}`,
     lens: formatLens(data),
     focal: formatMillimeters(data.FocalLength),
@@ -337,7 +349,7 @@ function canvasToBlob(canvas: HTMLCanvasElement, format: ExportFormat) {
   });
 }
 
-function cameraGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
+function cameraGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string, accentColor: string) {
   ctx.save();
   ctx.strokeStyle = color;
   ctx.lineWidth = Math.max(2, size * 0.045);
@@ -354,7 +366,7 @@ function cameraGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, size: 
   ctx.beginPath();
   ctx.arc(x + size * 0.7, y + size * 0.59, size * 0.22, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.fillStyle = '#e11d2e';
+  ctx.fillStyle = accentColor;
   ctx.beginPath();
   ctx.arc(x + size * 1.12, y + size * 0.39, size * 0.07, 0, Math.PI * 2);
   ctx.fill();
@@ -400,6 +412,9 @@ function drawWatermark(
   detailMode: DetailMode,
   heightPercent: number,
   cameraAsset: HTMLImageElement | null,
+  signature: string,
+  accentColor: string,
+  layoutMode: LayoutMode,
 ) {
   const width = image.width;
   // Keep the watermark visually consistent when the same sensor image is rotated.
@@ -424,21 +439,84 @@ function drawWatermark(
   ctx.fillStyle = background;
   ctx.fillRect(0, y0, width, bandHeight);
 
+  const isPortraitLayout = layoutMode === 'auto' && image.height > image.width;
+  if (isPortraitLayout) {
+    const portraitPad = width * 0.06;
+    const brandSize = Math.max(12, Math.min(scaleBase * 0.02, width * 0.032, bandHeight * 0.16));
+    const smallSize = Math.max(8, Math.min(scaleBase * 0.011, width * 0.017, bandHeight * 0.085));
+    const tinySize = Math.max(7, Math.min(scaleBase * 0.0092, width * 0.0145, bandHeight * 0.072));
+    const mainSize = Math.max(15, Math.min(scaleBase * 0.0185, width * 0.03, bandHeight * 0.15));
+    const topDetail = signature.trim();
+    const topHeight = brandSize + smallSize * 1.35 + (topDetail ? tinySize * 1.25 : 0);
+    const bottomHeight = mainSize + smallSize * 1.45 + (detailMode === 'full' ? tinySize * 1.35 : 0);
+    const contentGap = bandHeight * 0.06;
+    const totalHeight = topHeight + contentGap + bottomHeight;
+    const contentTop = y0 + Math.max(bandHeight * 0.07, (bandHeight - totalHeight) / 2);
+
+    const cameraHeight = Math.min(bandHeight * 0.27, topHeight * 0.95);
+    const cameraWidth = cameraHeight * 1.82;
+    const cameraY = contentTop + (topHeight - cameraHeight) / 2;
+    if (cameraAsset) cameraPhoto(ctx, cameraAsset, portraitPad, cameraY, cameraWidth, cameraHeight, theme);
+    else cameraGlyph(ctx, portraitPad, cameraY, cameraHeight, primary, accentColor);
+
+    const dividerX = portraitPad + cameraWidth + width * 0.018;
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(dividerX, contentTop, Math.max(3, width * 0.0012), topHeight);
+    const textX = dividerX + width * 0.026;
+    const topMaxWidth = width - portraitPad - textX;
+    const brandRow = contentTop + brandSize;
+    const lensRow = brandRow + smallSize * 1.35;
+    const signatureRow = lensRow + tinySize * 1.25;
+
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = primary;
+    ctx.font = `700 ${brandSize}px Arial, sans-serif`;
+    ctx.fillText(`${meta.make}  ${meta.model}`, textX, brandRow, topMaxWidth);
+    ctx.fillStyle = muted;
+    ctx.font = `500 ${smallSize}px Arial, sans-serif`;
+    ctx.fillText(shorten(meta.lens), textX, lensRow, topMaxWidth);
+    if (topDetail) {
+      ctx.font = `600 ${tinySize}px Arial, sans-serif`;
+      ctx.fillText(topDetail, textX, signatureRow, topMaxWidth);
+    }
+
+    const mainRow = contentTop + topHeight + contentGap + mainSize;
+    const secondaryRow = mainRow + smallSize * 1.45;
+    const detailRow = secondaryRow + tinySize * 1.35;
+    const centeredMaxWidth = width - portraitPad * 2;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = primary;
+    ctx.font = `700 ${mainSize}px Arial, sans-serif`;
+    ctx.fillText(`${meta.focal}   ·   ${meta.aperture}   ·   ${meta.exposure}   ·   ${meta.iso}`, width / 2, mainRow, centeredMaxWidth);
+    ctx.fillStyle = muted;
+    ctx.font = `500 ${smallSize}px Arial, sans-serif`;
+    ctx.fillText(`最大光圈 ${meta.maxAperture}  ·  35mm 等效 ${meta.focal35}  ·  ${meta.metering}`, width / 2, secondaryRow, centeredMaxWidth);
+    if (detailMode === 'full') {
+      const detailText = [meta.date, meta.exposureCompensation, meta.flash].filter((value) => value && value !== '—').join('  ·  ');
+      ctx.font = `500 ${tinySize}px Arial, sans-serif`;
+      ctx.fillText(detailText || '—', width / 2, detailRow, centeredMaxWidth);
+    }
+    return;
+  }
+
   const cameraHeight = bandHeight * 0.42;
   const cameraWidth = cameraHeight * 1.82;
   const cameraY = y0 + (bandHeight - cameraHeight) / 2;
   if (cameraAsset) cameraPhoto(ctx, cameraAsset, padX, cameraY, cameraWidth, cameraHeight, theme);
-  else cameraGlyph(ctx, padX, cameraY, cameraHeight, primary);
+  else cameraGlyph(ctx, padX, cameraY, cameraHeight, primary, accentColor);
   const dividerX = padX + cameraWidth + width * 0.014;
   const dividerHeight = bandHeight * 0.56;
-  ctx.fillStyle = '#e11d2e';
+  ctx.fillStyle = accentColor;
   ctx.fillRect(dividerX, y0 + (bandHeight - dividerHeight) / 2, Math.max(3, width * 0.001), dividerHeight);
 
   const textX = dividerX + width * 0.023;
   const brandSize = Math.max(12, Math.min(scaleBase * 0.0225, width * 0.032, bandHeight * 0.24));
   const smallSize = Math.max(8, Math.min(scaleBase * 0.0115, width * 0.017, bandHeight * 0.12));
   const tinySize = Math.max(7, Math.min(scaleBase * 0.0098, width * 0.015, bandHeight * 0.1));
-  const contentHeight = brandSize + smallSize * 1.5 + (detailMode === 'full' ? tinySize * 1.5 : 0);
+  const leftDetail = [signature.trim(), meta.date].filter(Boolean).join('  ·  ');
+  const hasDetailRow = detailMode === 'full' || Boolean(leftDetail);
+  const contentHeight = brandSize + smallSize * 1.5 + (hasDetailRow ? tinySize * 1.5 : 0);
   const contentTop = y0 + (bandHeight - contentHeight) / 2;
   const primaryRow = contentTop + brandSize;
   const secondaryRow = primaryRow + smallSize * 1.5;
@@ -452,9 +530,9 @@ function drawWatermark(
   ctx.fillStyle = muted;
   ctx.font = `500 ${smallSize}px Arial, sans-serif`;
   ctx.fillText(shorten(meta.lens), textX, secondaryRow, leftMaxWidth);
-  if (detailMode === 'full' && meta.date) {
+  if (leftDetail) {
     ctx.font = `500 ${tinySize}px Arial, sans-serif`;
-    ctx.fillText(meta.date, textX, detailRow, width * 0.38);
+    ctx.fillText(leftDetail, textX, detailRow, leftMaxWidth);
   }
 
   const rightX = width - padX;
@@ -471,7 +549,7 @@ function drawWatermark(
   ctx.fillText(secondLine, rightX, secondaryRow, rightMaxWidth);
   if (detailMode === 'full') {
     ctx.font = `500 ${tinySize}px Arial, sans-serif`;
-    ctx.fillText(`目标距离 ${meta.distance}  ·  ${meta.flash}`, rightX, detailRow, rightMaxWidth);
+    ctx.fillText(`${meta.exposureCompensation}  ·  目标距离 ${meta.distance}  ·  ${meta.flash}`, rightX, detailRow, rightMaxWidth);
   }
 }
 
@@ -484,7 +562,10 @@ export default function Home() {
   const [theme, setTheme] = useState<WatermarkTheme>('light');
   const [detailMode, setDetailMode] = useState<DetailMode>('full');
   const [exportFormat, setExportFormat] = useState<ExportFormat>('jpeg');
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>('auto');
   const [watermarkHeight, setWatermarkHeight] = useState(12.5);
+  const [signature, setSignature] = useState('');
+  const [accentColor, setAccentColor] = useState('#e11d2e');
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [cameraAsset, setCameraAsset] = useState<HTMLImageElement | null>(null);
   const [busy, setBusy] = useState(false);
@@ -497,8 +578,10 @@ export default function Home() {
   }, [loaded]);
 
   useEffect(() => {
-    if (loaded && canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset);
-  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset]);
+    if (loaded && canvasRef.current) {
+      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode);
+    }
+  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode]);
 
   useEffect(() => {
     let active = true;
@@ -614,7 +697,7 @@ export default function Home() {
         const result = await readPhotoFile(file);
         batchImage = result.image;
         const outputCanvas = document.createElement('canvas');
-        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset);
+        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode);
         const blob = await canvasToBlob(outputCanvas, exportFormat);
         const base = file.name.replace(/\.[^.]+$/, '');
         const sequence = String(index + 1).padStart(3, '0');
@@ -720,6 +803,40 @@ export default function Home() {
             <button className={detailMode === 'compact' ? 'active' : ''} onClick={() => setDetailMode('compact')}>精简参数</button>
           </div>
 
+          <label className="setting-label">竖图排版</label>
+          <div className="segmented">
+            <button className={layoutMode === 'auto' ? 'active' : ''} onClick={() => setLayoutMode('auto')}>自动双层</button>
+            <button className={layoutMode === 'landscape' ? 'active' : ''} onClick={() => setLayoutMode('landscape')}>保持横排</button>
+          </div>
+
+          <label className="setting-label" htmlFor="signature">个性署名</label>
+          <input
+            id="signature"
+            className="signature-input"
+            value={signature}
+            maxLength={36}
+            placeholder="例如 PHOTO BY KOICHINOI"
+            onChange={(event) => setSignature(event.target.value)}
+          />
+
+          <label className="setting-label">强调色</label>
+          <div className="color-options" aria-label="选择强调色">
+            {['#e11d2e', '#f36c21', '#d49a2a', '#3976d5', '#25a36f'].map((color) => (
+              <button
+                key={color}
+                className={accentColor.toLowerCase() === color ? 'active' : ''}
+                style={{ backgroundColor: color }}
+                aria-label={`选择颜色 ${color}`}
+                title={color}
+                onClick={() => setAccentColor(color)}
+              />
+            ))}
+            <label className="custom-color" title="自定义颜色">
+              <input type="color" value={accentColor} onChange={(event) => setAccentColor(event.target.value)} aria-label="自定义强调色" />
+              <span>＋</span>
+            </label>
+          </div>
+
           <label className="setting-label range-label"><span>水印高度</span><strong>{watermarkHeight.toFixed(1)}%</strong></label>
           <div className="range-setting">
             <input
@@ -760,8 +877,8 @@ export default function Home() {
                 <div className="sample-scene"><span>YOUR<br />PHOTO</span></div>
                 <div className={`sample-band ${theme}`}>
                   <div className="sample-camera-photo"><Image src="/zve10ii-camera-white-crop.png" alt="白色 ZV-E10 II 相机" width={684} height={375} unoptimized /></div>
-                  <div className="sample-brand"><strong>SONY&nbsp;&nbsp;ZV-E10 II</strong><span>E PZ 16-50mm F3.5-5.6 OSS II</span></div>
-                  <div className="sample-values"><strong>26mm&nbsp; · &nbsp;f/4.5&nbsp; · &nbsp;1/125s&nbsp; · &nbsp;ISO 400</strong><span>35mm 等效 39mm&nbsp; · &nbsp;图案测光&nbsp; · &nbsp;无闪光，强制</span></div>
+                  <div className="sample-brand" style={{ borderLeftColor: accentColor }}><strong>SONY&nbsp;&nbsp;ZV-E10 II</strong><span>{signature || 'E PZ 16-50mm F3.5-5.6 OSS II'}</span></div>
+                  <div className="sample-values"><strong>26mm&nbsp; · &nbsp;f/4.5&nbsp; · &nbsp;1/125s&nbsp; · &nbsp;ISO 400</strong><span>±0.0 EV&nbsp; · &nbsp;35mm 等效 39mm&nbsp; · &nbsp;图案测光</span></div>
                 </div>
               </div>
             )}

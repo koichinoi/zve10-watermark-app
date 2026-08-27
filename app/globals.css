@@ -137,6 +137,15 @@ button { color: inherit; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 4px; background: #e9e9e5; }
 .segmented button { border: 0; padding: 9px 8px; background: transparent; cursor: pointer; font-size: 12px; }
 .segmented button.active { background: #fff; box-shadow: 0 1px 5px rgba(20,20,20,.07); font-weight: 700; }
+.signature-input { width: 100%; border: 1px solid transparent; outline: 0; padding: 10px 11px; background: #e9e9e5; color: var(--ink); font-size: 12px; font-weight: 650; }
+.signature-input:focus { border-color: #b7b8bb; background: #fff; }
+.signature-input::placeholder { color: #9a9b9f; font-weight: 500; }
+.color-options { display: flex; align-items: center; gap: 9px; padding: 10px 12px; background: #e9e9e5; }
+.color-options > button, .custom-color { width: 28px; height: 28px; flex: none; border: 3px solid #e9e9e5; border-radius: 50%; box-shadow: 0 0 0 1px rgba(20,20,20,.12); cursor: pointer; }
+.color-options > button.active { box-shadow: 0 0 0 2px var(--ink); }
+.custom-color { position: relative; display: grid; place-items: center; overflow: hidden; background: conic-gradient(#e11d2e, #f6c744, #25a36f, #3976d5, #8b4bd6, #e11d2e); color: #fff; }
+.custom-color input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.custom-color span { font-size: 17px; font-weight: 700; line-height: 1; text-shadow: 0 1px 3px rgba(0,0,0,.45); pointer-events: none; }
 .range-label { display: flex; align-items: center; justify-content: space-between; }
 .range-label strong { color: var(--ink); font: 700 11px/1 ui-monospace, monospace; }
 .range-setting { padding: 10px 12px 8px; background: #e9e9e5; }
