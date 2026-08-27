@@ -2,6 +2,7 @@
 
 import exifr from 'exifr';
 import JSZip from 'jszip';
+import Image from 'next/image';
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 type WatermarkTheme = 'light' | 'dark';
@@ -242,6 +243,33 @@ function cameraGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, size: 
   ctx.restore();
 }
 
+function cameraPhoto(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  theme: WatermarkTheme,
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, height * 0.08);
+  ctx.clip();
+  ctx.shadowColor = theme === 'light' ? 'rgba(20,20,24,.18)' : 'rgba(0,0,0,.45)';
+  ctx.shadowBlur = height * 0.08;
+  ctx.drawImage(image, 0, 0, image.naturalWidth, image.naturalHeight, x, y, width, height);
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = theme === 'light' ? 'rgba(30,31,34,.16)' : 'rgba(255,255,255,.2)';
+  ctx.lineWidth = Math.max(1, height * 0.012);
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, height * 0.08);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function shorten(text: string, max = 56) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
@@ -253,6 +281,7 @@ function drawWatermark(
   theme: WatermarkTheme,
   detailMode: DetailMode,
   heightPercent: number,
+  cameraAsset: HTMLImageElement | null,
 ) {
   const width = image.width;
   const bandHeight = Math.max(72, Math.round(width * heightPercent / 100));
@@ -274,9 +303,12 @@ function drawWatermark(
   ctx.fillStyle = background;
   ctx.fillRect(0, y0, width, bandHeight);
 
-  const iconSize = bandHeight * 0.3;
-  cameraGlyph(ctx, padX, y0 + (bandHeight - iconSize) / 2, iconSize, primary);
-  const dividerX = padX + iconSize * 1.7;
+  const cameraHeight = bandHeight * 0.42;
+  const cameraWidth = cameraHeight * 1.82;
+  const cameraY = y0 + (bandHeight - cameraHeight) / 2;
+  if (cameraAsset) cameraPhoto(ctx, cameraAsset, padX, cameraY, cameraWidth, cameraHeight, theme);
+  else cameraGlyph(ctx, padX, cameraY, cameraHeight, primary);
+  const dividerX = padX + cameraWidth + width * 0.014;
   const dividerHeight = bandHeight * 0.56;
   ctx.fillStyle = '#e11d2e';
   ctx.fillRect(dividerX, y0 + (bandHeight - dividerHeight) / 2, Math.max(3, width * 0.001), dividerHeight);
@@ -331,6 +363,7 @@ export default function Home() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>('jpeg');
   const [watermarkHeight, setWatermarkHeight] = useState(12.5);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
+  const [cameraAsset, setCameraAsset] = useState<HTMLImageElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [status, setStatus] = useState('等待导入照片');
@@ -341,8 +374,16 @@ export default function Home() {
   }, [loaded]);
 
   useEffect(() => {
-    if (loaded && canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight);
-  }, [loaded, meta, theme, detailMode, watermarkHeight]);
+    if (loaded && canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset);
+  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset]);
+
+  useEffect(() => {
+    let active = true;
+    loadHtmlImage('/zve10ii-camera-white-crop.png').then((image) => {
+      if (active) setCameraAsset(image);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => () => loadedRef.current?.cleanup?.(), []);
 
@@ -436,7 +477,7 @@ export default function Home() {
         const result = await readPhotoFile(file);
         batchImage = result.image;
         const outputCanvas = document.createElement('canvas');
-        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight);
+        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset);
         const blob = await canvasToBlob(outputCanvas, exportFormat);
         const base = file.name.replace(/\.[^.]+$/, '');
         const sequence = String(index + 1).padStart(3, '0');
@@ -581,7 +622,7 @@ export default function Home() {
               <div className="sample-photo">
                 <div className="sample-scene"><span>YOUR<br />PHOTO</span></div>
                 <div className={`sample-band ${theme}`}>
-                  <div className="sample-camera"><i /><b>ZE10</b></div>
+                  <div className="sample-camera-photo"><Image src="/zve10ii-camera-white-crop.png" alt="白色 ZV-E10 II 相机" width={684} height={375} unoptimized /></div>
                   <div className="sample-brand"><strong>SONY&nbsp;&nbsp;ZV-E10 II</strong><span>E PZ 16-50mm F3.5-5.6 OSS II</span></div>
                   <div className="sample-values"><strong>26mm&nbsp; · &nbsp;f/4.5&nbsp; · &nbsp;1/125s&nbsp; · &nbsp;ISO 400</strong><span>35mm 等效 39mm&nbsp; · &nbsp;图案测光&nbsp; · &nbsp;无闪光，强制</span></div>
                 </div>

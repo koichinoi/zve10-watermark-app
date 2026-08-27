@@ -157,10 +157,8 @@ button { color: inherit; }
 .sample-band { min-height: 118px; padding: 24px 27px; display: grid; grid-template-columns: 74px minmax(180px, 1fr) 1.6fr; gap: 24px; align-items: center; }
 .sample-band.light { color: #151619; background: #f7f7f4; }
 .sample-band.dark { color: #f7f7f4; background: #111214; }
-.sample-camera { width: 62px; height: 42px; border: 2px solid currentColor; border-radius: 7px; position: relative; display: grid; place-items: center; }
-.sample-camera::before { content: ''; position: absolute; width: 27px; height: 8px; left: 8px; top: -9px; border: 2px solid currentColor; border-bottom: 0; border-radius: 5px 5px 0 0; }
-.sample-camera i { position: absolute; right: 6px; top: 7px; width: 5px; height: 5px; background: var(--red); border-radius: 50%; }
-.sample-camera b { font-size: 10px; }
+.sample-camera-photo { width: 72px; height: 42px; position: relative; overflow: hidden; border: 1px solid rgba(120,120,120,.16); border-radius: 4px; }
+.sample-camera-photo img { position: absolute; width: 100%; height: 100%; left: 0; top: 0; object-fit: cover; }
 .sample-brand { padding-left: 20px; border-left: 3px solid var(--red); min-width: 0; }
 .sample-brand strong, .sample-values strong { display: block; font-size: clamp(11px, 1.6vw, 17px); white-space: nowrap; }
 .sample-brand span, .sample-values span { display: block; margin-top: 8px; color: #8e9095; font-size: clamp(8px, 1vw, 11px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -199,7 +197,7 @@ footer span { color: var(--red); padding: 0 6px; }
   .control-panel, .preview-panel { padding: 17px; }
   .preview-stage { min-height: 310px; padding: 12px; }
   .sample-band { min-height: 84px; padding: 15px; grid-template-columns: 45px 1fr; gap: 13px; }
-  .sample-camera { width: 43px; height: 30px; }
+  .sample-camera-photo { width: 43px; height: 26px; }
   .sample-values { grid-column: 1 / -1; text-align: left; }
   .metadata-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metadata-grid label.wide { grid-column: span 2; }
