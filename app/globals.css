@@ -131,6 +131,11 @@ button { color: inherit; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 4px; background: #e9e9e5; }
 .segmented button { border: 0; padding: 9px 8px; background: transparent; cursor: pointer; font-size: 12px; }
 .segmented button.active { background: #fff; box-shadow: 0 1px 5px rgba(20,20,20,.07); font-weight: 700; }
+.range-label { display: flex; align-items: center; justify-content: space-between; }
+.range-label strong { color: var(--ink); font: 700 11px/1 ui-monospace, monospace; }
+.range-setting { padding: 10px 12px 8px; background: #e9e9e5; }
+.range-setting input { width: 100%; height: 4px; margin: 0; accent-color: var(--red); cursor: pointer; }
+.range-setting > div { display: flex; justify-content: space-between; margin-top: 6px; color: var(--muted); font-size: 9px; }
 .export-button { width: 100%; margin-top: 22px; border: 0; padding: 15px 16px; display: flex; align-items: center; justify-content: space-between; background: var(--ink); color: white; cursor: pointer; font-weight: 700; font-size: 13px; }
 .export-button b { color: #ff4d5a; font-size: 20px; }
 .export-button:disabled { opacity: .38; cursor: not-allowed; }

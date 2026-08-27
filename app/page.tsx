@@ -5,6 +5,7 @@ import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from
 
 type WatermarkTheme = 'light' | 'dark';
 type DetailMode = 'full' | 'compact';
+type ExportFormat = 'jpeg' | 'png';
 
 type PhotoMeta = {
   make: string;
@@ -205,9 +206,10 @@ function drawWatermark(
   meta: PhotoMeta,
   theme: WatermarkTheme,
   detailMode: DetailMode,
+  heightPercent: number,
 ) {
   const width = image.width;
-  const bandHeight = Math.max(90, Math.round(width * (detailMode === 'full' ? 0.125 : 0.105)));
+  const bandHeight = Math.max(72, Math.round(width * heightPercent / 100));
   const canvasHeight = image.height + bandHeight;
   canvas.width = width;
   canvas.height = canvasHeight;
@@ -234,9 +236,9 @@ function drawWatermark(
   ctx.fillRect(dividerX, y0 + (bandHeight - dividerHeight) / 2, Math.max(3, width * 0.001), dividerHeight);
 
   const textX = dividerX + width * 0.023;
-  const brandSize = Math.max(17, width * 0.0225);
-  const smallSize = Math.max(10, width * 0.0115);
-  const tinySize = Math.max(9, width * 0.0098);
+  const brandSize = Math.max(12, Math.min(width * 0.0225, bandHeight * 0.24));
+  const smallSize = Math.max(8, Math.min(width * 0.0115, bandHeight * 0.12));
+  const tinySize = Math.max(7, Math.min(width * 0.0098, bandHeight * 0.1));
   const contentHeight = brandSize + smallSize * 1.5 + (detailMode === 'full' ? tinySize * 1.5 : 0);
   const contentTop = y0 + (bandHeight - contentHeight) / 2;
   const primaryRow = contentTop + brandSize;
@@ -280,6 +282,8 @@ export default function Home() {
   const [meta, setMeta] = useState<PhotoMeta>(demoMeta);
   const [theme, setTheme] = useState<WatermarkTheme>('light');
   const [detailMode, setDetailMode] = useState<DetailMode>('full');
+  const [exportFormat, setExportFormat] = useState<ExportFormat>('jpeg');
+  const [watermarkHeight, setWatermarkHeight] = useState(12.5);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [status, setStatus] = useState('等待导入照片');
@@ -290,8 +294,8 @@ export default function Home() {
   }, [loaded]);
 
   useEffect(() => {
-    if (loaded && canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode);
-  }, [loaded, meta, theme, detailMode]);
+    if (loaded && canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight);
+  }, [loaded, meta, theme, detailMode, watermarkHeight]);
 
   useEffect(() => () => loadedRef.current?.cleanup?.(), []);
 
@@ -372,7 +376,9 @@ export default function Home() {
   const download = () => {
     const canvas = canvasRef.current;
     if (!canvas || !loaded) return;
-    setStatus('正在生成原尺寸无损 PNG…');
+    const lossless = exportFormat === 'png';
+    const label = lossless ? '原尺寸无损 PNG' : '原尺寸高画质 JPG';
+    setStatus(`正在生成${label}…`);
     canvas.toBlob((blob) => {
       if (!blob) {
         setError('导出失败，请重试。');
@@ -381,12 +387,12 @@ export default function Home() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       const base = loaded.name.replace(/\.[^.]+$/, '');
-      anchor.download = `${base}_ZVE10II_水印.png`;
+      anchor.download = `${base}_ZVE10II_水印.${lossless ? 'png' : 'jpg'}`;
       anchor.href = url;
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus('原尺寸无损水印照片已导出');
-    }, 'image/png');
+      setStatus(`${label}已导出`);
+    }, lossless ? 'image/png' : 'image/jpeg', lossless ? undefined : 0.98);
   };
 
   return (
@@ -455,8 +461,28 @@ export default function Home() {
             <button className={detailMode === 'compact' ? 'active' : ''} onClick={() => setDetailMode('compact')}>精简参数</button>
           </div>
 
+          <label className="setting-label range-label"><span>水印高度</span><strong>{watermarkHeight.toFixed(1)}%</strong></label>
+          <div className="range-setting">
+            <input
+              type="range"
+              min="8"
+              max="22"
+              step="0.5"
+              value={watermarkHeight}
+              onChange={(event) => setWatermarkHeight(Number(event.target.value))}
+              aria-label="水印高度"
+            />
+            <div><span>低</span><span>高</span></div>
+          </div>
+
+          <label className="setting-label">导出格式</label>
+          <div className="segmented">
+            <button className={exportFormat === 'jpeg' ? 'active' : ''} onClick={() => setExportFormat('jpeg')}>高画质 JPG</button>
+            <button className={exportFormat === 'png' ? 'active' : ''} onClick={() => setExportFormat('png')}>无损 PNG</button>
+          </div>
+
           <button className="export-button" disabled={!loaded || busy} onClick={download}>
-            <span>无损导出 PNG</span><b>→</b>
+            <span>{exportFormat === 'png' ? '无损导出 PNG' : '高画质导出 JPG'}</span><b>→</b>
           </button>
         </aside>
 
@@ -495,7 +521,7 @@ export default function Home() {
         </section>
       </div>
 
-      <footer>BUILT FOR SONY ZV-E10 II <span>·</span> LOSSLESS PNG <span>·</span> ORIGINAL RESOLUTION</footer>
+      <footer>BUILT FOR SONY ZV-E10 II <span>·</span> JPG / LOSSLESS PNG <span>·</span> ORIGINAL RESOLUTION</footer>
     </main>
   );
 }
