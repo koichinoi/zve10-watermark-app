@@ -207,16 +207,13 @@ function drawWatermark(
   detailMode: DetailMode,
 ) {
   const width = image.width;
-  const bandHeight = Math.max(110, Math.round(width * (detailMode === 'full' ? 0.18 : 0.145)));
+  const bandHeight = Math.max(90, Math.round(width * (detailMode === 'full' ? 0.125 : 0.105)));
   const canvasHeight = image.height + bandHeight;
-  const maxDimension = 12200;
-  const scaleDown = Math.min(1, maxDimension / Math.max(width, canvasHeight));
-  canvas.width = Math.round(width * scaleDown);
-  canvas.height = Math.round(canvasHeight * scaleDown);
+  canvas.width = width;
+  canvas.height = canvasHeight;
 
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  ctx.scale(scaleDown, scaleDown);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(image.source, 0, 0, width, image.height);
@@ -226,47 +223,52 @@ function drawWatermark(
   const muted = theme === 'light' ? '#62646a' : '#a9abb1';
   const y0 = image.height;
   const padX = width * 0.045;
-  const padY = bandHeight * 0.18;
   ctx.fillStyle = background;
   ctx.fillRect(0, y0, width, bandHeight);
 
-  const iconSize = bandHeight * 0.33;
-  cameraGlyph(ctx, padX, y0 + padY + bandHeight * 0.04, iconSize, primary);
+  const iconSize = bandHeight * 0.3;
+  cameraGlyph(ctx, padX, y0 + (bandHeight - iconSize) / 2, iconSize, primary);
   const dividerX = padX + iconSize * 1.7;
+  const dividerHeight = bandHeight * 0.56;
   ctx.fillStyle = '#e11d2e';
-  ctx.fillRect(dividerX, y0 + padY, Math.max(3, width * 0.001), bandHeight - padY * 2);
+  ctx.fillRect(dividerX, y0 + (bandHeight - dividerHeight) / 2, Math.max(3, width * 0.001), dividerHeight);
 
   const textX = dividerX + width * 0.023;
-  const brandSize = Math.max(18, width * 0.026);
-  const smallSize = Math.max(11, width * 0.0125);
-  const tinySize = Math.max(9, width * 0.0105);
+  const brandSize = Math.max(17, width * 0.0225);
+  const smallSize = Math.max(10, width * 0.0115);
+  const tinySize = Math.max(9, width * 0.0098);
+  const contentHeight = brandSize + smallSize * 1.5 + (detailMode === 'full' ? tinySize * 1.5 : 0);
+  const contentTop = y0 + (bandHeight - contentHeight) / 2;
+  const primaryRow = contentTop + brandSize;
+  const secondaryRow = primaryRow + smallSize * 1.5;
+  const detailRow = secondaryRow + tinySize * 1.5;
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
   ctx.fillStyle = primary;
   ctx.font = `700 ${brandSize}px Arial, sans-serif`;
-  ctx.fillText(`${meta.make}  ${meta.model}`, textX, y0 + padY + brandSize);
+  ctx.fillText(`${meta.make}  ${meta.model}`, textX, primaryRow);
   ctx.fillStyle = muted;
   ctx.font = `500 ${smallSize}px Arial, sans-serif`;
-  ctx.fillText(shorten(meta.lens), textX, y0 + padY + brandSize + smallSize * 1.75);
-  if (meta.date) {
+  ctx.fillText(shorten(meta.lens), textX, secondaryRow);
+  if (detailMode === 'full' && meta.date) {
     ctx.font = `500 ${tinySize}px Arial, sans-serif`;
-    ctx.fillText(meta.date, textX, y0 + bandHeight - padY * 0.7, width * 0.38);
+    ctx.fillText(meta.date, textX, detailRow, width * 0.38);
   }
 
   const rightX = width - padX;
   ctx.textAlign = 'right';
   ctx.fillStyle = primary;
-  ctx.font = `700 ${Math.max(17, width * 0.023)}px Arial, sans-serif`;
-  ctx.fillText(`${meta.focal}   ·   ${meta.aperture}   ·   ${meta.exposure}   ·   ${meta.iso}`, rightX, y0 + padY + brandSize);
+  ctx.font = `700 ${Math.max(16, width * 0.0205)}px Arial, sans-serif`;
+  ctx.fillText(`${meta.focal}   ·   ${meta.aperture}   ·   ${meta.exposure}   ·   ${meta.iso}`, rightX, primaryRow);
   ctx.fillStyle = muted;
   ctx.font = `500 ${smallSize}px Arial, sans-serif`;
   const secondLine = detailMode === 'full'
     ? `最大光圈 ${meta.maxAperture}  ·  35mm 等效 ${meta.focal35}  ·  ${meta.metering}`
     : `35mm 等效 ${meta.focal35}  ·  ${meta.metering}`;
-  ctx.fillText(secondLine, rightX, y0 + padY + brandSize + smallSize * 1.75);
+  ctx.fillText(secondLine, rightX, secondaryRow);
   if (detailMode === 'full') {
     ctx.font = `500 ${tinySize}px Arial, sans-serif`;
-    ctx.fillText(`目标距离 ${meta.distance}  ·  ${meta.flash}`, rightX, y0 + bandHeight - padY * 0.7);
+    ctx.fillText(`目标距离 ${meta.distance}  ·  ${meta.flash}`, rightX, detailRow);
   }
 }
 
@@ -370,7 +372,7 @@ export default function Home() {
   const download = () => {
     const canvas = canvasRef.current;
     if (!canvas || !loaded) return;
-    setStatus('正在生成高清 JPEG…');
+    setStatus('正在生成原尺寸无损 PNG…');
     canvas.toBlob((blob) => {
       if (!blob) {
         setError('导出失败，请重试。');
@@ -379,12 +381,12 @@ export default function Home() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       const base = loaded.name.replace(/\.[^.]+$/, '');
-      anchor.download = `${base}_ZVE10II_水印.jpg`;
+      anchor.download = `${base}_ZVE10II_水印.png`;
       anchor.href = url;
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus('高清水印照片已导出');
-    }, 'image/jpeg', 0.96);
+      setStatus('原尺寸无损水印照片已导出');
+    }, 'image/png');
   };
 
   return (
@@ -454,7 +456,7 @@ export default function Home() {
           </div>
 
           <button className="export-button" disabled={!loaded || busy} onClick={download}>
-            <span>导出高清照片</span><b>→</b>
+            <span>无损导出 PNG</span><b>→</b>
           </button>
         </aside>
 
@@ -493,7 +495,7 @@ export default function Home() {
         </section>
       </div>
 
-      <footer>BUILT FOR SONY ZV-E10 II <span>·</span> 96% JPEG QUALITY <span>·</span> LOCAL PROCESSING</footer>
+      <footer>BUILT FOR SONY ZV-E10 II <span>·</span> LOSSLESS PNG <span>·</span> ORIGINAL RESOLUTION</footer>
     </main>
   );
 }
