@@ -1,6 +1,7 @@
 'use client';
 
 import exifr from 'exifr';
+import JSZip from 'jszip';
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 type WatermarkTheme = 'light' | 'dark';
@@ -172,6 +173,51 @@ function loadHtmlImage(url: string) {
   });
 }
 
+async function readPhotoFile(file: File) {
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = (await exifr.parse(file, true)) || {};
+  } catch {
+    parsed = {};
+  }
+
+  try {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const image: LoadedImage = {
+      source: bitmap,
+      width: bitmap.width,
+      height: bitmap.height,
+      name: file.name,
+      rawPreview: false,
+      cleanup: () => bitmap.close(),
+    };
+    return { image, meta: metadataFromExif(parsed) };
+  } catch {
+    const thumbnailUrl = await exifr.thumbnailUrl(file);
+    if (!thumbnailUrl) throw new Error('这个 RAW 文件没有可用的内嵌预览，请先转成 JPEG 再导入。');
+    const htmlImage = await loadHtmlImage(thumbnailUrl);
+    const image: LoadedImage = {
+      source: htmlImage,
+      width: htmlImage.naturalWidth,
+      height: htmlImage.naturalHeight,
+      name: file.name,
+      rawPreview: true,
+      cleanup: () => URL.revokeObjectURL(thumbnailUrl),
+    };
+    return { image, meta: metadataFromExif(parsed) };
+  }
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, format: ExportFormat) {
+  const lossless = format === 'png';
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('图片生成失败'));
+    }, lossless ? 'image/png' : 'image/jpeg', lossless ? undefined : 0.98);
+  });
+}
+
 function cameraGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
   ctx.save();
   ctx.strokeStyle = color;
@@ -284,6 +330,7 @@ export default function Home() {
   const [detailMode, setDetailMode] = useState<DetailMode>('full');
   const [exportFormat, setExportFormat] = useState<ExportFormat>('jpeg');
   const [watermarkHeight, setWatermarkHeight] = useState(12.5);
+  const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [status, setStatus] = useState('等待导入照片');
@@ -306,40 +353,12 @@ export default function Home() {
     setStatus('正在读取照片和 EXIF…');
     let nextImage: LoadedImage | null = null;
     try {
-      let parsed: Record<string, unknown> = {};
-      try {
-        parsed = (await exifr.parse(file, true)) || {};
-      } catch {
-        parsed = {};
-      }
-
-      try {
-        const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-        nextImage = {
-          source: bitmap,
-          width: bitmap.width,
-          height: bitmap.height,
-          name: file.name,
-          rawPreview: false,
-          cleanup: () => bitmap.close(),
-        };
-      } catch {
-        const thumbnailUrl = await exifr.thumbnailUrl(file);
-        if (!thumbnailUrl) throw new Error('这个 RAW 文件没有可用的内嵌预览，请先转成 JPEG 再导入。');
-        const image = await loadHtmlImage(thumbnailUrl);
-        nextImage = {
-          source: image,
-          width: image.naturalWidth,
-          height: image.naturalHeight,
-          name: file.name,
-          rawPreview: true,
-          cleanup: () => URL.revokeObjectURL(thumbnailUrl),
-        };
-      }
+      const result = await readPhotoFile(file);
+      nextImage = result.image;
 
       loadedRef.current?.cleanup?.();
       setLoaded(nextImage);
-      const nextMeta = metadataFromExif(parsed);
+      const nextMeta = result.meta;
       setMeta(nextMeta);
       const found = fields.filter(({ key }) => nextMeta[key] !== '—').length;
       setStatus(nextImage.rawPreview
@@ -354,36 +373,39 @@ export default function Home() {
     }
   }, []);
 
+  const importFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    setBatchFiles(files);
+    await importFile(files[0]);
+  }, [importFile]);
+
   const chooseFile = () => inputRef.current?.click();
 
   const onInput = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) void importFile(file);
+    const files = Array.from(event.target.files || []);
+    if (files.length) void importFiles(files);
     event.target.value = '';
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragging(false);
-    const file = event.dataTransfer.files?.[0];
-    if (file) void importFile(file);
+    const files = Array.from(event.dataTransfer.files || []);
+    if (files.length) void importFiles(files);
   };
 
   const updateMeta = (key: keyof PhotoMeta, value: string) => {
     setMeta((current) => ({ ...current, [key]: value }));
   };
 
-  const download = () => {
+  const downloadSingle = async () => {
     const canvas = canvasRef.current;
     if (!canvas || !loaded) return;
     const lossless = exportFormat === 'png';
     const label = lossless ? '原尺寸无损 PNG' : '原尺寸高画质 JPG';
     setStatus(`正在生成${label}…`);
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        setError('导出失败，请重试。');
-        return;
-      }
+    try {
+      const blob = await canvasToBlob(canvas, exportFormat);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       const base = loaded.name.replace(/\.[^.]+$/, '');
@@ -392,8 +414,59 @@ export default function Home() {
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       setStatus(`${label}已导出`);
-    }, lossless ? 'image/png' : 'image/jpeg', lossless ? undefined : 0.98);
+    } catch {
+      setError('导出失败，请重试。');
+    }
   };
+
+  const downloadBatch = async () => {
+    if (batchFiles.length < 2) return downloadSingle();
+    setBusy(true);
+    setError('');
+    const zip = new JSZip();
+    const extension = exportFormat === 'png' ? 'png' : 'jpg';
+    let completed = 0;
+    let failed = 0;
+
+    for (let index = 0; index < batchFiles.length; index += 1) {
+      const file = batchFiles[index];
+      setStatus(`正在处理 ${index + 1}/${batchFiles.length} · ${file.name}`);
+      let batchImage: LoadedImage | null = null;
+      try {
+        const result = await readPhotoFile(file);
+        batchImage = result.image;
+        const outputCanvas = document.createElement('canvas');
+        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight);
+        const blob = await canvasToBlob(outputCanvas, exportFormat);
+        const base = file.name.replace(/\.[^.]+$/, '');
+        const sequence = String(index + 1).padStart(3, '0');
+        zip.file(`${sequence}_${base}_ZVE10II_水印.${extension}`, blob);
+        completed += 1;
+      } catch {
+        failed += 1;
+      } finally {
+        batchImage?.cleanup?.();
+      }
+    }
+
+    try {
+      setStatus(`正在打包 ${completed} 张照片…`);
+      const archive = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+      const url = URL.createObjectURL(archive);
+      const anchor = document.createElement('a');
+      anchor.download = `ZVE10II_水印_${completed}张.zip`;
+      anchor.href = url;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStatus(`批量导出完成：成功 ${completed} 张${failed ? `，失败 ${failed} 张` : ''}`);
+    } catch {
+      setError('压缩包生成失败，请减少照片数量后重试。');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const download = () => batchFiles.length > 1 ? downloadBatch() : downloadSingle();
 
   return (
     <main className="app-shell">
@@ -424,7 +497,7 @@ export default function Home() {
             <span className={`status-dot ${loaded ? 'ready' : ''}`} />
           </div>
 
-          <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,.arw,.ARW" hidden onChange={onInput} />
+          <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,.arw,.ARW" multiple hidden onChange={onInput} />
           <div
             className={`dropzone ${dragging ? 'dragging' : ''} ${loaded ? 'has-file' : ''}`}
             onClick={chooseFile}
@@ -437,9 +510,17 @@ export default function Home() {
             onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') chooseFile(); }}
           >
             <div className="upload-symbol">＋</div>
-            <strong>{loaded ? loaded.name : '点击选择或拖入照片'}</strong>
-            <span>支持 JPG、PNG、WEBP、ARW</span>
+            <strong>{batchFiles.length > 1 ? `已选择 ${batchFiles.length} 张照片` : loaded ? loaded.name : '点击选择或拖入照片'}</strong>
+            <span>支持多选 · JPG、PNG、WEBP、ARW</span>
           </div>
+
+          {batchFiles.length > 1 && (
+            <div className="batch-summary">
+              <div><strong>批量模式</strong><span>{batchFiles.length} 张</span></div>
+              <p>当前预览：{batchFiles[0].name}</p>
+              <small>导出时会逐张读取参数并打包为 ZIP。</small>
+            </div>
+          )}
 
           <div className="read-status">
             <span className={busy ? 'spinner' : 'status-icon'}>{busy ? '' : loaded ? '✓' : 'i'}</span>
@@ -482,7 +563,9 @@ export default function Home() {
           </div>
 
           <button className="export-button" disabled={!loaded || busy} onClick={download}>
-            <span>{exportFormat === 'png' ? '无损导出 PNG' : '高画质导出 JPG'}</span><b>→</b>
+            <span>{batchFiles.length > 1
+              ? `批量导出 ${batchFiles.length} 张 ZIP`
+              : exportFormat === 'png' ? '无损导出 PNG' : '高画质导出 JPG'}</span><b>→</b>
           </button>
         </aside>
 
