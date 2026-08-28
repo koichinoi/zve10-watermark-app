@@ -2,7 +2,6 @@
 
 import exifr from 'exifr';
 import JSZip from 'jszip';
-import NextImage from 'next/image';
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 type WatermarkTheme = 'light' | 'dark';
@@ -654,7 +653,8 @@ export default function Home() {
 
   useEffect(() => {
     let active = true;
-    loadHtmlImage('/zve10ii-camera-white-crop.png').then((image) => {
+    const cameraUrl = new URL('zve10ii-camera-white-crop.png', window.location.href).toString();
+    loadHtmlImage(cameraUrl).then((image) => {
       if (active) setCameraAsset(image);
     }).catch(() => undefined);
     return () => { active = false; };
@@ -967,7 +967,10 @@ export default function Home() {
               <div className="sample-photo">
                 <div className="sample-scene"><span>YOUR<br />PHOTO</span></div>
                 <div className={`sample-band ${theme}`}>
-                  <div className="sample-camera-photo"><NextImage src="/zve10ii-camera-white-crop.png" alt="白色 ZV-E10 II 相机" width={684} height={375} unoptimized /></div>
+                  <div className="sample-camera-photo">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="zve10ii-camera-white-crop.png" alt="白色 ZV-E10 II 相机" width={684} height={375} />
+                  </div>
                   <div className="sample-brand" style={{ borderLeftColor: accentColor }}><strong>SONY&nbsp;&nbsp;ZV-E10 II</strong><span>{signature || 'E PZ 16-50mm F3.5-5.6 OSS II'}</span></div>
                   <div className="sample-values"><strong>26mm&nbsp; · &nbsp;f/4.5&nbsp; · &nbsp;1/125s&nbsp; · &nbsp;ISO 400</strong><span>±0.0 EV&nbsp; · &nbsp;35mm 等效 39mm&nbsp; · &nbsp;图案测光</span></div>
                 </div>
