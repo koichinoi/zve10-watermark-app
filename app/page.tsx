@@ -993,7 +993,17 @@ export default function Home() {
         </section>
       </div>
 
-      <footer>BUILT FOR SONY ZV-E10 II <span>·</span> JPG / LOSSLESS PNG <span>·</span> ORIGINAL RESOLUTION</footer>
+      <footer>
+        <div>BUILT FOR SONY ZV-E10 II <span>·</span> JPG / LOSSLESS PNG <span>·</span> ORIGINAL RESOLUTION</div>
+        <a
+          href="https://github.com/koichinoi/zve10-watermark-app"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="在 GitHub 查看 ZV-E10 II 水印项目"
+        >
+          github.com/koichinoi/zve10-watermark-app <b>↗</b>
+        </a>
+      </footer>
     </main>
   );
 }

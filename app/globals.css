@@ -194,6 +194,11 @@ button { color: inherit; }
 
 footer { padding: 28px 20px 38px; border-top: 1px solid var(--line); text-align: center; color: #8b8d92; font: 600 9px/1.5 ui-monospace, monospace; letter-spacing: .14em; }
 footer span { color: var(--red); padding: 0 6px; }
+footer a { width: fit-content; margin: 11px auto 0; display: flex; align-items: center; gap: 7px; color: #51535a; letter-spacing: .06em; text-decoration: none; transition: color .16s; }
+footer a b { color: var(--red); font-size: 11px; transition: transform .16s; }
+footer a:hover, footer a:focus-visible { color: var(--ink); }
+footer a:hover b, footer a:focus-visible b { transform: translate(2px, -2px); }
+footer a:focus-visible { outline: 1px solid var(--red); outline-offset: 5px; }
 
 @media (max-width: 1050px) {
   .hero { min-height: auto; align-items: flex-start; flex-direction: column; }
