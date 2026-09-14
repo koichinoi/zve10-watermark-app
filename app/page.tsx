@@ -580,6 +580,17 @@ function lensPhoto(
   ctx.restore();
 }
 
+function lensAssetForModel(
+  lensModel: string,
+  compactLensAsset: HTMLImageElement | null,
+  zoom18135LensAsset: HTMLImageElement | null,
+) {
+  const normalized = lensModel.replace(/\s+/g, '').toUpperCase();
+  if (normalized.includes('18-135') || normalized.includes('SEL18135')) return zoom18135LensAsset;
+  if (normalized.includes('16-50') || normalized.includes('SELP1650')) return compactLensAsset;
+  return null;
+}
+
 function drawHolidayWatermark(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -633,7 +644,8 @@ function drawWatermark(
   detailMode: DetailMode,
   heightPercent: number,
   cameraAsset: HTMLImageElement | null,
-  lensAsset: HTMLImageElement | null,
+  compactLensAsset: HTMLImageElement | null,
+  zoom18135LensAsset: HTMLImageElement | null,
   signature: string,
   accentColor: string,
   lensImageEnabled: boolean,
@@ -664,6 +676,7 @@ function drawWatermark(
   const padX = width * 0.045;
   ctx.fillStyle = background;
   ctx.fillRect(0, y0, width, bandHeight);
+  const matchedLensAsset = lensAssetForModel(meta.lens, compactLensAsset, zoom18135LensAsset);
 
   const isPortraitLayout = layoutMode === 'auto' && image.height > image.width;
   if (isPortraitLayout) {
@@ -685,11 +698,11 @@ function drawWatermark(
     if (cameraAsset) cameraPhoto(ctx, cameraAsset, portraitPad, cameraY, cameraWidth, cameraHeight, theme);
     else cameraGlyph(ctx, portraitPad, cameraY, cameraHeight, primary, accentColor);
 
-    const lensHeight = lensImageEnabled && lensAsset ? cameraHeight * 0.92 : 0;
-    const lensWidth = lensHeight * (1402 / 1122);
+    const lensHeight = lensImageEnabled && matchedLensAsset ? cameraHeight * 0.92 : 0;
+    const lensWidth = matchedLensAsset ? lensHeight * (matchedLensAsset.naturalWidth / matchedLensAsset.naturalHeight) : 0;
     const gearGap = lensHeight ? width * 0.01 : 0;
-    if (lensAsset && lensHeight) {
-      lensPhoto(ctx, lensAsset, portraitPad + cameraWidth + gearGap, contentTop + (topHeight - lensHeight) / 2, lensWidth, lensHeight, theme);
+    if (matchedLensAsset && lensHeight) {
+      lensPhoto(ctx, matchedLensAsset, portraitPad + cameraWidth + gearGap, contentTop + (topHeight - lensHeight) / 2, lensWidth, lensHeight, theme);
     }
     const dividerX = portraitPad + cameraWidth + gearGap + lensWidth + width * 0.018;
     ctx.fillStyle = accentColor;
@@ -753,11 +766,11 @@ function drawWatermark(
   const cameraY = y0 + (bandHeight - cameraHeight) / 2;
   if (cameraAsset) cameraPhoto(ctx, cameraAsset, padX, cameraY, cameraWidth, cameraHeight, theme);
   else cameraGlyph(ctx, padX, cameraY, cameraHeight, primary, accentColor);
-  const lensHeight = lensImageEnabled && lensAsset ? cameraHeight * 0.92 : 0;
-  const lensWidth = lensHeight * (1402 / 1122);
+  const lensHeight = lensImageEnabled && matchedLensAsset ? cameraHeight * 0.92 : 0;
+  const lensWidth = matchedLensAsset ? lensHeight * (matchedLensAsset.naturalWidth / matchedLensAsset.naturalHeight) : 0;
   const gearGap = lensHeight ? width * 0.008 : 0;
-  if (lensAsset && lensHeight) {
-    lensPhoto(ctx, lensAsset, padX + cameraWidth + gearGap, y0 + (bandHeight - lensHeight) / 2, lensWidth, lensHeight, theme);
+  if (matchedLensAsset && lensHeight) {
+    lensPhoto(ctx, matchedLensAsset, padX + cameraWidth + gearGap, y0 + (bandHeight - lensHeight) / 2, lensWidth, lensHeight, theme);
   }
   const dividerX = padX + cameraWidth + gearGap + lensWidth + width * 0.014;
   const dividerHeight = bandHeight * 0.56;
@@ -838,7 +851,8 @@ export default function Home() {
   const [parameterVisibility, setParameterVisibility] = useState<ParameterVisibility>(defaultParameterVisibility);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [cameraAsset, setCameraAsset] = useState<HTMLImageElement | null>(null);
-  const [lensAsset, setLensAsset] = useState<HTMLImageElement | null>(null);
+  const [compactLensAsset, setCompactLensAsset] = useState<HTMLImageElement | null>(null);
+  const [zoom18135LensAsset, setZoom18135LensAsset] = useState<HTMLImageElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [status, setStatus] = useState('等待导入照片');
@@ -850,19 +864,23 @@ export default function Home() {
 
   useEffect(() => {
     if (loaded && canvasRef.current) {
-      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, lensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility);
+      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility);
     }
-  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, lensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility]);
+  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility]);
 
   useEffect(() => {
     let active = true;
     const cameraUrl = new URL('zve10ii-camera-white-crop.png', window.location.href).toString();
-    const lensUrl = new URL('zve10ii-lens-white.png', window.location.href).toString();
+    const compactLensUrl = new URL('zve10ii-lens-white.png', window.location.href).toString();
+    const zoom18135LensUrl = new URL('zve10ii-lens-18-135-black.png', window.location.href).toString();
     loadHtmlImage(cameraUrl).then((image) => {
       if (active) setCameraAsset(image);
     }).catch(() => undefined);
-    loadHtmlImage(lensUrl).then((image) => {
-      if (active) setLensAsset(image);
+    loadHtmlImage(compactLensUrl).then((image) => {
+      if (active) setCompactLensAsset(image);
+    }).catch(() => undefined);
+    loadHtmlImage(zoom18135LensUrl).then((image) => {
+      if (active) setZoom18135LensAsset(image);
     }).catch(() => undefined);
     return () => { active = false; };
   }, []);
@@ -973,7 +991,7 @@ export default function Home() {
         const result = await readPhotoFile(file);
         batchImage = result.image;
         const outputCanvas = document.createElement('canvas');
-        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, lensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility);
+        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility);
         const blob = await canvasToBlob(outputCanvas, exportFormat);
         const base = file.name.replace(/\.[^.]+$/, '');
         const sequence = String(index + 1).padStart(3, '0');
@@ -1136,7 +1154,7 @@ export default function Home() {
 
           <label className="setting-label">镜头图片</label>
           <label className="feature-switch">
-            <span><strong>显示镜头</strong><small>在底部水印栏的相机旁显示镜头图片</small></span>
+            <span><strong>自动匹配镜头</strong><small>根据 EXIF 匹配 16-50 II 或 18-135 OSS</small></span>
             <input
               type="checkbox"
               checked={lensImageEnabled}
