@@ -195,18 +195,14 @@ button { color: inherit; }
 .sample-holiday strong, .sample-holiday small { display: block; }
 .sample-holiday strong { font-size: clamp(15px, 2vw, 26px); line-height: 1.1; }
 .sample-holiday small { margin-top: 5px; color: rgba(255,255,255,.72); font: 600 clamp(7px, .75vw, 10px)/1 Arial, sans-serif; letter-spacing: .08em; }
-.sample-lens { width: min(43%, 285px); min-width: 150px; padding: 10px 13px; position: absolute; left: 3%; top: 6%; display: flex; align-items: center; gap: 11px; overflow: hidden; border: 1px solid rgba(255,255,255,.28); border-radius: 7px; background: rgba(12,13,16,.62); color: #fff; backdrop-filter: blur(8px); }
-.sample-lens > i { width: 28px; height: 28px; flex: none; border: 2px solid #fff; border-radius: 50%; position: relative; }
-.sample-lens > i::after { content: ''; width: 9px; height: 9px; position: absolute; left: 50%; top: 50%; border: 3px solid var(--lens-color); border-radius: 50%; transform: translate(-50%, -50%); }
-.sample-lens > span { min-width: 0; }
-.sample-lens small, .sample-lens strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.sample-lens small { color: rgba(255,255,255,.62); font: 700 7px/1 Arial, sans-serif; letter-spacing: .12em; }
-.sample-lens strong { margin-top: 5px; font-size: clamp(8px, 1vw, 12px); line-height: 1; }
-.sample-band { min-height: 118px; padding: 24px 27px; display: grid; grid-template-columns: 74px minmax(180px, 1fr) 1.6fr; gap: 24px; align-items: center; }
+.sample-band { min-height: 118px; padding: 24px 27px; display: grid; grid-template-columns: auto minmax(180px, 1fr) 1.6fr; gap: 24px; align-items: center; }
 .sample-band.light { color: #151619; background: #f7f7f4; }
 .sample-band.dark { color: #f7f7f4; background: #111214; }
+.sample-gear-photos { display: flex; align-items: center; gap: 7px; }
 .sample-camera-photo { width: 72px; height: 42px; position: relative; overflow: hidden; border: 1px solid rgba(120,120,120,.16); border-radius: 4px; }
 .sample-camera-photo img { position: absolute; width: 100%; height: 100%; left: 0; top: 0; object-fit: cover; }
+.sample-lens-photo { width: 49px; height: 42px; flex: none; display: grid; place-items: center; }
+.sample-lens-photo img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 2px 2px rgba(0,0,0,.14)); }
 .sample-brand { padding-left: 20px; border-left: 3px solid var(--red); min-width: 0; }
 .sample-brand strong, .sample-values strong { display: block; font-size: clamp(11px, 1.6vw, 17px); white-space: nowrap; }
 .sample-brand span, .sample-values span { display: block; margin-top: 8px; color: #8e9095; font-size: clamp(8px, 1vw, 11px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -249,8 +245,10 @@ footer a:focus-visible { outline: 1px solid var(--red); outline-offset: 5px; }
   .workspace, .hero { padding-left: 14px; padding-right: 14px; }
   .control-panel, .preview-panel { padding: 17px; }
   .preview-stage { min-height: 310px; padding: 12px; }
-  .sample-band { min-height: 84px; padding: 15px; grid-template-columns: 45px 1fr; gap: 13px; }
+  .sample-band { min-height: 84px; padding: 15px; grid-template-columns: auto 1fr; gap: 13px; }
   .sample-camera-photo { width: 43px; height: 26px; }
+  .sample-gear-photos { gap: 4px; }
+  .sample-lens-photo { width: 30px; height: 26px; }
   .sample-values { grid-column: 1 / -1; text-align: left; }
   .metadata-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metadata-grid label.wide { grid-column: span 2; }
