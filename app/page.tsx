@@ -362,7 +362,36 @@ function findEmbeddedJpegs(buffer: ArrayBuffer) {
   return candidates.sort((left, right) => (right.width * right.height) - (left.width * left.height));
 }
 
-async function loadLargestRawPreview(file: File) {
+function orientRawPreview(image: HTMLImageElement, orientation: number) {
+  if (orientation < 2 || orientation > 8) return { source: image as CanvasImageSource, width: image.naturalWidth, height: image.naturalHeight };
+  // Some browsers may already honor orientation stored inside the embedded JPEG.
+  if (orientation >= 5 && image.naturalHeight > image.naturalWidth) {
+    return { source: image as CanvasImageSource, width: image.naturalWidth, height: image.naturalHeight };
+  }
+
+  const sourceWidth = image.naturalWidth;
+  const sourceHeight = image.naturalHeight;
+  const swapsDimensions = orientation >= 5;
+  const canvas = document.createElement('canvas');
+  canvas.width = swapsDimensions ? sourceHeight : sourceWidth;
+  canvas.height = swapsDimensions ? sourceWidth : sourceHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return { source: image as CanvasImageSource, width: sourceWidth, height: sourceHeight };
+
+  switch (orientation) {
+    case 2: ctx.setTransform(-1, 0, 0, 1, sourceWidth, 0); break;
+    case 3: ctx.setTransform(-1, 0, 0, -1, sourceWidth, sourceHeight); break;
+    case 4: ctx.setTransform(1, 0, 0, -1, 0, sourceHeight); break;
+    case 5: ctx.setTransform(0, 1, 1, 0, 0, 0); break;
+    case 6: ctx.setTransform(0, 1, -1, 0, sourceHeight, 0); break;
+    case 7: ctx.setTransform(0, -1, -1, 0, sourceHeight, sourceWidth); break;
+    case 8: ctx.setTransform(0, -1, 1, 0, 0, sourceWidth); break;
+  }
+  ctx.drawImage(image, 0, 0);
+  return { source: canvas as CanvasImageSource, width: canvas.width, height: canvas.height };
+}
+
+async function loadLargestRawPreview(file: File, orientation: number) {
   const candidates = findEmbeddedJpegs(await file.arrayBuffer());
   for (const candidate of candidates.slice(0, 6)) {
     const objectUrl = URL.createObjectURL(file.slice(candidate.start, candidate.end, 'image/jpeg'));
@@ -372,10 +401,11 @@ async function loadLargestRawPreview(file: File) {
         URL.revokeObjectURL(objectUrl);
         continue;
       }
+      const oriented = orientRawPreview(htmlImage, orientation);
       const image: LoadedImage = {
-        source: htmlImage,
-        width: htmlImage.naturalWidth,
-        height: htmlImage.naturalHeight,
+        source: oriented.source,
+        width: oriented.width,
+        height: oriented.height,
         name: file.name,
         rawPreview: true,
         cleanup: () => URL.revokeObjectURL(objectUrl),
@@ -444,7 +474,8 @@ async function readPhotoFile(file: File) {
   }
 
   try {
-    const image = await loadLargestRawPreview(file);
+    const orientation = await exifr.orientation(file).catch(() => undefined);
+    const image = await loadLargestRawPreview(file, typeof orientation === 'number' ? orientation : 1);
     return { image, meta };
   } catch {
     // Older RAW files may only expose the standard EXIF thumbnail.
@@ -818,7 +849,7 @@ export default function Home() {
       setMeta(nextMeta);
       const found = fields.filter(({ key }) => nextMeta[key] !== '—').length;
       setStatus(nextImage.rawPreview
-        ? `已读取 ${found} 项参数 · ARW 使用内嵌预览图`
+        ? `已读取 ${found} 项参数 · ARW 使用最大预览图`
         : `已读取 ${found} 项参数 · 可直接导出`);
     } catch (reason) {
       nextImage?.cleanup?.();
@@ -1000,7 +1031,7 @@ export default function Home() {
 
           <div className="read-status">
             <span className={busy ? 'spinner' : 'status-icon'}>{busy ? '' : loaded ? '✓' : 'i'}</span>
-            <p><strong>{status}</strong>{loaded?.rawPreview && <small>需要全分辨率时，请导入由 RAW 转出的 JPEG。</small>}</p>
+            <p><strong>{status}</strong>{loaded?.rawPreview && <small>已按相机方向自动转正；画质以 ARW 内嵌 JPEG 为准。</small>}</p>
           </div>
           {error && <p className="error-message">{error}</p>}
 
