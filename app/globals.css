@@ -144,6 +144,15 @@ button { color: inherit; }
 .custom-color { position: relative; display: grid; place-items: center; overflow: hidden; background: conic-gradient(#e11d2e, #f6c744, #25a36f, #3976d5, #8b4bd6, #e11d2e); color: #fff; }
 .custom-color input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .custom-color span { font-size: 17px; font-weight: 700; line-height: 1; text-shadow: 0 1px 3px rgba(0,0,0,.45); pointer-events: none; }
+.holiday-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.holiday-grid button { min-width: 0; border: 1px solid #deded9; padding: 8px 9px; display: flex; align-items: center; gap: 8px; background: #eeeeea; text-align: left; cursor: pointer; transition: border-color .16s, background .16s; }
+.holiday-grid button i { width: 7px; height: 28px; flex: none; border-radius: 4px; background: var(--holiday-color); opacity: .55; }
+.holiday-grid button span { min-width: 0; display: block; }
+.holiday-grid button strong, .holiday-grid button small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.holiday-grid button strong { font-size: 11px; }
+.holiday-grid button small { margin-top: 3px; color: var(--muted); font: 600 7px/1 ui-monospace, monospace; letter-spacing: .03em; }
+.holiday-grid button.active { border-color: var(--holiday-color); background: #fff; box-shadow: inset 0 0 0 1px var(--holiday-color); }
+.holiday-grid button.active i { opacity: 1; }
 .parameter-heading { display: flex; align-items: center; justify-content: space-between; }
 .parameter-heading button { border: 0; padding: 2px 0; background: none; color: var(--red); cursor: pointer; font-size: 10px; font-weight: 700; }
 .parameter-switches { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #dcdcd7; border: 1px solid #dcdcd7; }
@@ -169,8 +178,13 @@ button { color: inherit; }
 .preview-stage { min-height: 440px; padding: clamp(17px, 3vw, 42px); display: grid; place-items: center; background: #25262a; overflow: hidden; }
 .preview-stage canvas { display: block; max-width: 100%; max-height: 760px; box-shadow: 0 22px 48px rgba(0,0,0,.3); }
 .sample-photo { width: min(780px, 100%); box-shadow: 0 24px 55px rgba(0,0,0,.35); }
-.sample-scene { aspect-ratio: 3/1.72; display: grid; place-items: center; color: rgba(255,255,255,.84); background: radial-gradient(circle at 62% 35%, rgba(255,220,170,.85), transparent 13%), linear-gradient(135deg, #40464a, #9b765e 45%, #202d30); }
-.sample-scene span { font-size: clamp(26px, 5vw, 62px); font-weight: 800; letter-spacing: -.07em; line-height: .82; text-align: center; mix-blend-mode: overlay; }
+.sample-scene { aspect-ratio: 3/1.72; position: relative; display: grid; place-items: center; color: rgba(255,255,255,.84); background: radial-gradient(circle at 62% 35%, rgba(255,220,170,.85), transparent 13%), linear-gradient(135deg, #40464a, #9b765e 45%, #202d30); }
+.sample-scene > span { font-size: clamp(26px, 5vw, 62px); font-weight: 800; letter-spacing: -.07em; line-height: .82; text-align: center; mix-blend-mode: overlay; }
+.sample-holiday { width: min(38%, 245px); min-width: 125px; padding: 11px 14px 10px 20px; position: absolute; right: 3%; bottom: 6%; overflow: hidden; border: 1px solid rgba(255,255,255,.28); border-radius: 7px; background: rgba(12,13,16,.62); color: #fff; backdrop-filter: blur(8px); }
+.sample-holiday::before { content: ''; width: 6px; position: absolute; inset: 0 auto 0 0; background: var(--holiday-color); }
+.sample-holiday strong, .sample-holiday small { display: block; }
+.sample-holiday strong { font-size: clamp(15px, 2vw, 26px); line-height: 1.1; }
+.sample-holiday small { margin-top: 5px; color: rgba(255,255,255,.72); font: 600 clamp(7px, .75vw, 10px)/1 Arial, sans-serif; letter-spacing: .08em; }
 .sample-band { min-height: 118px; padding: 24px 27px; display: grid; grid-template-columns: 74px minmax(180px, 1fr) 1.6fr; gap: 24px; align-items: center; }
 .sample-band.light { color: #151619; background: #f7f7f4; }
 .sample-band.dark { color: #f7f7f4; background: #111214; }

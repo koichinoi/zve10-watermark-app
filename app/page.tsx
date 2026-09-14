@@ -8,6 +8,7 @@ type WatermarkTheme = 'light' | 'dark';
 type DetailMode = 'full' | 'compact';
 type ExportFormat = 'jpeg' | 'png';
 type LayoutMode = 'auto' | 'landscape';
+type HolidayId = 'none' | 'new-year' | 'spring-festival' | 'lantern' | 'qingming' | 'labor-day' | 'dragon-boat' | 'mid-autumn' | 'national-day' | 'christmas';
 
 type PhotoMeta = {
   make: string;
@@ -162,6 +163,19 @@ const defaultParameterVisibility: ParameterVisibility = {
   focal35: true,
   date: true,
 };
+
+const holidayPresets: Array<{ id: HolidayId; title: string; subtitle: string; color: string }> = [
+  { id: 'none', title: '关闭', subtitle: '纯参数水印', color: '#71747b' },
+  { id: 'new-year', title: '新年', subtitle: 'HAPPY NEW YEAR', color: '#d7a629' },
+  { id: 'spring-festival', title: '新春', subtitle: 'SPRING FESTIVAL', color: '#e02936' },
+  { id: 'lantern', title: '元宵', subtitle: 'LANTERN FESTIVAL', color: '#ec6139' },
+  { id: 'qingming', title: '清明', subtitle: 'QINGMING FESTIVAL', color: '#5f846d' },
+  { id: 'labor-day', title: '五一', subtitle: 'LABOUR DAY', color: '#3976d5' },
+  { id: 'dragon-boat', title: '端午', subtitle: 'DRAGON BOAT', color: '#21805c' },
+  { id: 'mid-autumn', title: '中秋', subtitle: 'MID-AUTUMN', color: '#c88a24' },
+  { id: 'national-day', title: '国庆', subtitle: 'NATIONAL DAY', color: '#d91f2f' },
+  { id: 'christmas', title: '圣诞', subtitle: 'MERRY CHRISTMAS', color: '#24734d' },
+];
 
 function enabledValues(visibility: ParameterVisibility, values: Array<[ParameterKey, string]>) {
   return values.filter(([key, value]) => visibility[key] && value.trim()).map(([, value]) => value);
@@ -441,6 +455,51 @@ function shorten(text: string, max = 56) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function drawHolidayWatermark(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  photoHeight: number,
+  scaleBase: number,
+  holidayId: HolidayId,
+) {
+  const preset = holidayPresets.find((item) => item.id === holidayId);
+  if (!preset || preset.id === 'none') return;
+
+  const badgeWidth = Math.min(width * 0.42, scaleBase * 0.23);
+  const badgeHeight = badgeWidth * 0.3;
+  const padding = Math.max(width * 0.025, scaleBase * 0.014);
+  const x = width - padding - badgeWidth;
+  const y = photoHeight - padding - badgeHeight;
+  const radius = badgeHeight * 0.13;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(12, 13, 16, .62)';
+  ctx.beginPath();
+  ctx.roundRect(x, y, badgeWidth, badgeHeight, radius);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.24)';
+  ctx.lineWidth = Math.max(1, scaleBase * 0.0007);
+  ctx.stroke();
+
+  const accentWidth = Math.max(4, badgeWidth * 0.018);
+  ctx.fillStyle = preset.color;
+  ctx.beginPath();
+  ctx.roundRect(x, y, accentWidth, badgeHeight, [radius, 0, 0, radius]);
+  ctx.fill();
+
+  const textX = x + badgeWidth * 0.12;
+  const titleSize = badgeHeight * 0.36;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#fff';
+  ctx.font = `700 ${titleSize}px "Microsoft YaHei", Arial, sans-serif`;
+  ctx.fillText(preset.title, textX, y + badgeHeight * 0.51, badgeWidth * 0.78);
+  ctx.fillStyle = 'rgba(255,255,255,.72)';
+  ctx.font = `600 ${badgeHeight * 0.13}px Arial, sans-serif`;
+  ctx.fillText(preset.subtitle, textX, y + badgeHeight * 0.76, badgeWidth * 0.78);
+  ctx.restore();
+}
+
 function drawWatermark(
   canvas: HTMLCanvasElement,
   image: LoadedImage,
@@ -451,6 +510,7 @@ function drawWatermark(
   cameraAsset: HTMLImageElement | null,
   signature: string,
   accentColor: string,
+  holidayId: HolidayId,
   layoutMode: LayoutMode,
   visibility: ParameterVisibility,
 ) {
@@ -468,6 +528,7 @@ function drawWatermark(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(image.source, 0, 0, width, image.height);
+  drawHolidayWatermark(ctx, width, image.height, scaleBase, holidayId);
 
   const background = theme === 'light' ? '#f8f8f6' : '#101113';
   const primary = theme === 'light' ? '#121316' : '#f7f7f4';
@@ -633,6 +694,7 @@ export default function Home() {
   const [watermarkHeight, setWatermarkHeight] = useState(12.5);
   const [signature, setSignature] = useState('');
   const [accentColor, setAccentColor] = useState('#e11d2e');
+  const [holidayId, setHolidayId] = useState<HolidayId>('none');
   const [parameterVisibility, setParameterVisibility] = useState<ParameterVisibility>(defaultParameterVisibility);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [cameraAsset, setCameraAsset] = useState<HTMLImageElement | null>(null);
@@ -647,9 +709,9 @@ export default function Home() {
 
   useEffect(() => {
     if (loaded && canvasRef.current) {
-      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode, parameterVisibility);
+      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, holidayId, layoutMode, parameterVisibility);
     }
-  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode, parameterVisibility]);
+  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, holidayId, layoutMode, parameterVisibility]);
 
   useEffect(() => {
     let active = true;
@@ -766,7 +828,7 @@ export default function Home() {
         const result = await readPhotoFile(file);
         batchImage = result.image;
         const outputCanvas = document.createElement('canvas');
-        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, layoutMode, parameterVisibility);
+        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, holidayId, layoutMode, parameterVisibility);
         const blob = await canvasToBlob(outputCanvas, exportFormat);
         const base = file.name.replace(/\.[^.]+$/, '');
         const sequence = String(index + 1).padStart(3, '0');
@@ -798,6 +860,7 @@ export default function Home() {
 
   const download = () => batchFiles.length > 1 ? downloadBatch() : downloadSingle();
   const allParametersVisible = parameterOptions.every(({ key }) => parameterVisibility[key]);
+  const activeHoliday = holidayPresets.find((item) => item.id === holidayId) || holidayPresets[0];
 
   const setAllParameters = (visible: boolean) => {
     setParameterVisibility(Object.fromEntries(parameterOptions.map(({ key }) => [key, visible])) as ParameterVisibility);
@@ -911,6 +974,21 @@ export default function Home() {
             </label>
           </div>
 
+          <label className="setting-label">节日水印</label>
+          <div className="holiday-grid" aria-label="选择节日水印">
+            {holidayPresets.map((preset) => (
+              <button
+                key={preset.id}
+                className={holidayId === preset.id ? 'active' : ''}
+                style={{ '--holiday-color': preset.color } as React.CSSProperties}
+                onClick={() => setHolidayId(preset.id)}
+              >
+                <i />
+                <span><strong>{preset.title}</strong><small>{preset.subtitle}</small></span>
+              </button>
+            ))}
+          </div>
+
           <div className="setting-label parameter-heading">
             <span>参数显示</span>
             <button onClick={() => setAllParameters(!allParametersVisible)}>{allParametersVisible ? '全部隐藏' : '全部显示'}</button>
@@ -965,7 +1043,14 @@ export default function Home() {
               <canvas ref={canvasRef} aria-label="水印照片预览" />
             ) : (
               <div className="sample-photo">
-                <div className="sample-scene"><span>YOUR<br />PHOTO</span></div>
+                <div className="sample-scene">
+                  <span>YOUR<br />PHOTO</span>
+                  {holidayId !== 'none' && (
+                    <div className="sample-holiday" style={{ '--holiday-color': activeHoliday.color } as React.CSSProperties}>
+                      <strong>{activeHoliday.title}</strong><small>{activeHoliday.subtitle}</small>
+                    </div>
+                  )}
+                </div>
                 <div className={`sample-band ${theme}`}>
                   <div className="sample-camera-photo">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
