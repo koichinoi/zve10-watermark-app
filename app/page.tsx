@@ -564,6 +564,59 @@ function shorten(text: string, max = 56) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function drawLensWatermark(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  scaleBase: number,
+  lens: string,
+  enabled: boolean,
+  accentColor: string,
+) {
+  const lensName = lens.trim();
+  if (!enabled || !lensName || lensName === '—') return;
+
+  const badgeWidth = Math.min(width * 0.5, scaleBase * 0.28);
+  const badgeHeight = badgeWidth * 0.21;
+  const padding = Math.max(width * 0.025, scaleBase * 0.014);
+  const x = padding;
+  const y = padding;
+  const radius = badgeHeight * 0.15;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(12, 13, 16, .62)';
+  ctx.beginPath();
+  ctx.roundRect(x, y, badgeWidth, badgeHeight, radius);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.24)';
+  ctx.lineWidth = Math.max(1, scaleBase * 0.0007);
+  ctx.stroke();
+
+  const centerX = x + badgeHeight * 0.36;
+  const centerY = y + badgeHeight * 0.5;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = badgeHeight * 0.035;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, badgeHeight * 0.2, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = accentColor;
+  ctx.lineWidth = badgeHeight * 0.055;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, badgeHeight * 0.095, 0, Math.PI * 2);
+  ctx.stroke();
+
+  const textX = x + badgeHeight * 0.68;
+  const maxTextWidth = badgeWidth - (textX - x) - badgeHeight * 0.18;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = 'rgba(255,255,255,.62)';
+  ctx.font = `700 ${badgeHeight * 0.13}px Arial, sans-serif`;
+  ctx.fillText('LENS', textX, y + badgeHeight * 0.34, maxTextWidth);
+  ctx.fillStyle = '#fff';
+  ctx.font = `600 ${badgeHeight * 0.19}px "Microsoft YaHei", Arial, sans-serif`;
+  ctx.fillText(shorten(lensName, 48), textX, y + badgeHeight * 0.68, maxTextWidth);
+  ctx.restore();
+}
+
 function drawHolidayWatermark(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -619,6 +672,7 @@ function drawWatermark(
   cameraAsset: HTMLImageElement | null,
   signature: string,
   accentColor: string,
+  lensBadgeEnabled: boolean,
   holidayId: HolidayId,
   layoutMode: LayoutMode,
   visibility: ParameterVisibility,
@@ -637,6 +691,7 @@ function drawWatermark(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(image.source, 0, 0, width, image.height);
+  drawLensWatermark(ctx, width, scaleBase, meta.lens, lensBadgeEnabled, accentColor);
   drawHolidayWatermark(ctx, width, image.height, scaleBase, holidayId);
 
   const background = theme === 'light' ? '#f8f8f6' : '#101113';
@@ -803,6 +858,7 @@ export default function Home() {
   const [watermarkHeight, setWatermarkHeight] = useState(12.5);
   const [signature, setSignature] = useState('');
   const [accentColor, setAccentColor] = useState('#e11d2e');
+  const [lensBadgeEnabled, setLensBadgeEnabled] = useState(false);
   const [holidayId, setHolidayId] = useState<HolidayId>('none');
   const [parameterVisibility, setParameterVisibility] = useState<ParameterVisibility>(defaultParameterVisibility);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
@@ -818,9 +874,9 @@ export default function Home() {
 
   useEffect(() => {
     if (loaded && canvasRef.current) {
-      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, holidayId, layoutMode, parameterVisibility);
+      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, lensBadgeEnabled, holidayId, layoutMode, parameterVisibility);
     }
-  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, holidayId, layoutMode, parameterVisibility]);
+  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, lensBadgeEnabled, holidayId, layoutMode, parameterVisibility]);
 
   useEffect(() => {
     let active = true;
@@ -937,7 +993,7 @@ export default function Home() {
         const result = await readPhotoFile(file);
         batchImage = result.image;
         const outputCanvas = document.createElement('canvas');
-        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, holidayId, layoutMode, parameterVisibility);
+        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, signature, accentColor, lensBadgeEnabled, holidayId, layoutMode, parameterVisibility);
         const blob = await canvasToBlob(outputCanvas, exportFormat);
         const base = file.name.replace(/\.[^.]+$/, '');
         const sequence = String(index + 1).padStart(3, '0');
@@ -1098,6 +1154,16 @@ export default function Home() {
             ))}
           </div>
 
+          <label className="setting-label">镜头水印</label>
+          <label className="feature-switch">
+            <span><strong>镜头铭牌</strong><small>在照片左上角显示镜头型号</small></span>
+            <input
+              type="checkbox"
+              checked={lensBadgeEnabled}
+              onChange={(event) => setLensBadgeEnabled(event.target.checked)}
+            />
+          </label>
+
           <div className="setting-label parameter-heading">
             <span>参数显示</span>
             <button onClick={() => setAllParameters(!allParametersVisible)}>{allParametersVisible ? '全部隐藏' : '全部显示'}</button>
@@ -1154,6 +1220,11 @@ export default function Home() {
               <div className="sample-photo">
                 <div className="sample-scene">
                   <span>YOUR<br />PHOTO</span>
+                  {lensBadgeEnabled && (
+                    <div className="sample-lens" style={{ '--lens-color': accentColor } as React.CSSProperties}>
+                      <i /><span><small>LENS</small><strong>{demoMeta.lens}</strong></span>
+                    </div>
+                  )}
                   {holidayId !== 'none' && (
                     <div className="sample-holiday" style={{ '--holiday-color': activeHoliday.color } as React.CSSProperties}>
                       <strong>{activeHoliday.title}</strong><small>{activeHoliday.subtitle}</small>
