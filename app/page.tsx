@@ -317,6 +317,77 @@ async function loadNativeImageFile(file: File) {
   }
 }
 
+type EmbeddedJpeg = { start: number; end: number; width: number; height: number };
+
+function readEmbeddedJpegSize(bytes: Uint8Array, start: number, end: number) {
+  let offset = start + 2;
+  while (offset + 8 < end) {
+    while (offset < end && bytes[offset] !== 0xff) offset += 1;
+    while (offset < end && bytes[offset] === 0xff) offset += 1;
+    if (offset >= end) break;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) continue;
+    if (offset + 1 >= end) break;
+    const segmentLength = (bytes[offset] << 8) | bytes[offset + 1];
+    if (segmentLength < 2 || offset + segmentLength > end) break;
+    const isStartOfFrame = (marker >= 0xc0 && marker <= 0xc3)
+      || (marker >= 0xc5 && marker <= 0xc7)
+      || (marker >= 0xc9 && marker <= 0xcb)
+      || (marker >= 0xcd && marker <= 0xcf);
+    if (isStartOfFrame && segmentLength >= 7) {
+      const height = (bytes[offset + 3] << 8) | bytes[offset + 4];
+      const width = (bytes[offset + 5] << 8) | bytes[offset + 6];
+      return width > 0 && height > 0 ? { width, height } : null;
+    }
+    if (marker === 0xda) break;
+    offset += segmentLength;
+  }
+  return null;
+}
+
+function findEmbeddedJpegs(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  const candidates: EmbeddedJpeg[] = [];
+  for (let start = 0; start + 10 < bytes.length; start += 1) {
+    if (bytes[start] !== 0xff || bytes[start + 1] !== 0xd8 || bytes[start + 2] !== 0xff) continue;
+    let end = start + 3;
+    while (end + 1 < bytes.length && !(bytes[end] === 0xff && bytes[end + 1] === 0xd9)) end += 1;
+    if (end + 1 >= bytes.length) continue;
+    end += 2;
+    const size = readEmbeddedJpegSize(bytes, start, end);
+    if (size) candidates.push({ start, end, ...size });
+    start = end - 1;
+  }
+  return candidates.sort((left, right) => (right.width * right.height) - (left.width * left.height));
+}
+
+async function loadLargestRawPreview(file: File) {
+  const candidates = findEmbeddedJpegs(await file.arrayBuffer());
+  for (const candidate of candidates.slice(0, 6)) {
+    const objectUrl = URL.createObjectURL(file.slice(candidate.start, candidate.end, 'image/jpeg'));
+    try {
+      const htmlImage = await loadHtmlImage(objectUrl);
+      if (htmlImage.naturalWidth * htmlImage.naturalHeight < 320 * 240) {
+        URL.revokeObjectURL(objectUrl);
+        continue;
+      }
+      const image: LoadedImage = {
+        source: htmlImage,
+        width: htmlImage.naturalWidth,
+        height: htmlImage.naturalHeight,
+        name: file.name,
+        rawPreview: true,
+        cleanup: () => URL.revokeObjectURL(objectUrl),
+      };
+      return image;
+    } catch {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+  throw new Error('missing large preview');
+}
+
 async function readPhotoFile(file: File) {
   let parsed: Record<string, unknown> = {};
   try {
@@ -370,6 +441,13 @@ async function readPhotoFile(file: File) {
     } catch {
       throw new Error(`无法读取“${file.name}”，请确认它是完整的 JPG、PNG 或 WEBP 图片。`);
     }
+  }
+
+  try {
+    const image = await loadLargestRawPreview(file);
+    return { image, meta };
+  } catch {
+    // Older RAW files may only expose the standard EXIF thumbnail.
   }
 
   try {
