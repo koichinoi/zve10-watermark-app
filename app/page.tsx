@@ -51,6 +51,72 @@ type DroppedEntry = {
 
 const supportedPhotoPattern = /\.(?:jpe?g|png|webp|arw)$/i;
 
+// Reading every metadata block makes exifr inspect ICC, XMP, thumbnails and
+// Sony MakerNotes as well. Large camera JPEGs can exhaust the memory available
+// to a mobile tab before the useful EXIF values are returned. Keep the first
+// pass small and deterministic, then retry with an ArrayBuffer for browsers
+// whose content-provider File objects do not support reliable sliced reads.
+const photoExifTags = [
+  'Make',
+  'Model',
+  'UniqueCameraModel',
+  'FNumber',
+  'ApertureValue',
+  'ExposureTime',
+  'ExposureCompensation',
+  'ExposureBiasValue',
+  'ISO',
+  'PhotographicSensitivity',
+  'ISOSpeedRatings',
+  'LensModel',
+  'Lens',
+  'LensInfo',
+  'LensSpecification',
+  'FocalLength',
+  'MaxApertureValue',
+  'MeteringMode',
+  'SubjectDistance',
+  'Flash',
+  'FocalLengthIn35mmFormat',
+  'FocalLengthIn35mmFilm',
+  'DateTimeOriginal',
+  'DateTimeDigitized',
+  'CreateDate',
+  'ModifyDate',
+  'Orientation',
+];
+
+const usefulExifTags = photoExifTags.filter((tag) => !['Orientation', 'ModifyDate'].includes(tag));
+const photoExifOptions = {
+  pick: photoExifTags,
+  // exifr supports this runtime option, although version 7.1.3 omits it from
+  // its public TypeScript Options interface.
+  silentErrors: false,
+} as Parameters<typeof exifr.parse>[1];
+
+function hasUsefulExif(data: Record<string, unknown>) {
+  return usefulExifTags.some((tag) => {
+    const value = data[tag];
+    return value !== undefined && value !== null && value !== '';
+  });
+}
+
+async function parsePhotoExif(file: File) {
+  try {
+    return (await exifr.parse(file, photoExifOptions)) || {};
+  } catch {
+    // Retry below. Some Android content providers expose a File that can be
+    // decoded as an image but fails when a library reads it in Blob slices.
+  }
+
+  try {
+    const buffer = await file.arrayBuffer();
+    return (await exifr.parse(buffer, photoExifOptions)) || {};
+  } catch {
+    return {};
+  }
+}
+
 function isSupportedPhoto(file: File) {
   return supportedPhotoPattern.test(file.name)
     || /image\/(?:jpeg|png|webp)/i.test(file.type)
@@ -229,9 +295,9 @@ function normalizeModel(value: unknown) {
 function formatLens(data: Record<string, unknown>) {
   const direct = String(data.LensModel || data.Lens || '').trim();
   if (direct) return direct;
-  const info = data.LensInfo;
+  const info = data.LensInfo ?? data.LensSpecification;
   if (Array.isArray(info) && info.length >= 4) {
-    return `${trimNumber(Number(info[2]))}-${trimNumber(Number(info[3]))}mm f/${trimNumber(Number(info[0]))}-${trimNumber(Number(info[1]))}`;
+    return `${trimNumber(Number(info[0]))}-${trimNumber(Number(info[1]))}mm f/${trimNumber(Number(info[2]))}-${trimNumber(Number(info[3]))}`;
   }
   return '—';
 }
@@ -273,7 +339,7 @@ function metadataFromExif(data: Record<string, unknown>): PhotoMeta {
   const isoNumber = finiteNumber(iso);
   return {
     make: String(data.Make || 'SONY').trim().toUpperCase(),
-    model: normalizeModel(data.Model),
+    model: normalizeModel(data.Model ?? data.UniqueCameraModel),
     aperture: formatAperture(data.FNumber ?? data.ApertureValue),
     exposure: formatExposure(data.ExposureTime),
     exposureCompensation: formatExposureCompensation(data.ExposureCompensation ?? data.ExposureBiasValue),
@@ -285,7 +351,7 @@ function metadataFromExif(data: Record<string, unknown>): PhotoMeta {
     distance: formatDistance(data.SubjectDistance),
     flash: formatFlash(data.Flash),
     focal35: formatMillimeters(data.FocalLengthIn35mmFormat ?? data.FocalLengthIn35mmFilm),
-    date: formatDate(data.DateTimeOriginal ?? data.CreateDate),
+    date: formatDate(data.DateTimeOriginal ?? data.DateTimeDigitized ?? data.CreateDate ?? data.ModifyDate),
   };
 }
 
@@ -419,12 +485,7 @@ async function loadLargestRawPreview(file: File, orientation: number) {
 }
 
 async function readPhotoFile(file: File) {
-  let parsed: Record<string, unknown> = {};
-  try {
-    parsed = (await exifr.parse(file, true)) || {};
-  } catch {
-    parsed = {};
-  }
+  const parsed = await parsePhotoExif(file);
   let meta: PhotoMeta;
   try {
     meta = metadataFromExif(parsed);
@@ -446,7 +507,7 @@ async function readPhotoFile(file: File) {
           rawPreview: false,
           cleanup: () => bitmap.close(),
         };
-        return { image, meta };
+        return { image, meta, hasExif: hasUsefulExif(parsed) };
       } catch {
         try {
           const bitmap = await createImageBitmap(file);
@@ -458,7 +519,7 @@ async function readPhotoFile(file: File) {
             rawPreview: false,
             cleanup: () => bitmap.close(),
           };
-          return { image, meta };
+          return { image, meta, hasExif: hasUsefulExif(parsed) };
         } catch {
           // Continue with the browser's native image decoder below.
         }
@@ -467,7 +528,7 @@ async function readPhotoFile(file: File) {
 
     try {
       const image = await loadNativeImageFile(file);
-      return { image, meta };
+      return { image, meta, hasExif: hasUsefulExif(parsed) };
     } catch {
       throw new Error(`无法读取“${file.name}”，请确认它是完整的 JPG、PNG 或 WEBP 图片。`);
     }
@@ -476,7 +537,7 @@ async function readPhotoFile(file: File) {
   try {
     const orientation = await exifr.orientation(file).catch(() => undefined);
     const image = await loadLargestRawPreview(file, typeof orientation === 'number' ? orientation : 1);
-    return { image, meta };
+    return { image, meta, hasExif: hasUsefulExif(parsed) };
   } catch {
     // Older RAW files may only expose the standard EXIF thumbnail.
   }
@@ -493,7 +554,7 @@ async function readPhotoFile(file: File) {
       rawPreview: true,
       cleanup: () => URL.revokeObjectURL(thumbnailUrl),
     };
-    return { image, meta };
+    return { image, meta, hasExif: hasUsefulExif(parsed) };
   } catch {
     throw new Error(`无法读取“${file.name}”的 RAW 预览，请先将它转成 JPEG 再导入。`);
   }
@@ -901,10 +962,16 @@ export default function Home() {
       setLoaded(nextImage);
       const nextMeta = result.meta;
       setMeta(nextMeta);
-      const found = fields.filter(({ key }) => nextMeta[key] !== '—').length;
-      setStatus(nextImage.rawPreview
-        ? `已读取 ${found} 项参数 · ARW 使用最大预览图`
-        : `已读取 ${found} 项参数 · 可直接导出`);
+      const found = result.hasExif
+        ? fields.filter(({ key }) => nextMeta[key] && nextMeta[key] !== '—').length
+        : 0;
+      if (!result.hasExif) {
+        setStatus('未检测到 EXIF · 请从文件管理器选择相机原始 JPG');
+      } else {
+        setStatus(nextImage.rawPreview
+          ? `已读取 ${found} 项参数 · ARW 使用最大预览图`
+          : `已读取 ${found} 项参数 · 可直接导出`);
+      }
     } catch (reason) {
       nextImage?.cleanup?.();
       setError(reason instanceof Error ? reason.message : '读取失败，请换一张原始照片重试。');
