@@ -31,6 +31,8 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Test EXIF recovery
+        run: node --test tests/photo-exif.test.mjs
       - name: Build static website
         run: pnpm run build:pages
       - name: Configure GitHub Pages

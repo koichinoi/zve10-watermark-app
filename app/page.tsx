@@ -68,6 +68,7 @@ const photoExifTags = [
   'ISO',
   'PhotographicSensitivity',
   'ISOSpeedRatings',
+  'RecommendedExposureIndex',
   'LensModel',
   'Lens',
   'LensInfo',
@@ -101,22 +102,65 @@ function hasUsefulExif(data: Record<string, unknown>) {
   });
 }
 
-async function parsePhotoExif(file: File) {
-  try {
-    return (await exifr.parse(file, photoExifOptions)) || {};
-  } catch {
-    // Retry below. Some Android content providers expose a File that can be
-    // decoded as an image but fails when a library reads it in Blob slices.
-  }
+const coreExifTagGroups = [
+  ['Model', 'UniqueCameraModel'],
+  ['FNumber', 'ApertureValue'],
+  ['ExposureTime'],
+  ['ISO', 'PhotographicSensitivity', 'ISOSpeedRatings', 'RecommendedExposureIndex'],
+  ['FocalLength'],
+];
 
-  try {
-    const buffer = await file.arrayBuffer();
-    return (await exifr.parse(buffer, photoExifOptions)) || {};
-  } catch {
-    return {};
-  }
+function hasCoreExif(data: Record<string, unknown>) {
+  return coreExifTagGroups.every((group) => group.some((tag) => {
+    const value = data[tag];
+    return value !== undefined && value !== null && value !== ''
+      && (typeof value !== 'number' || (Number.isFinite(value) && value > 0));
+  }));
 }
 
+function mergeExifValues(base: Record<string, unknown>, extra: Record<string, unknown>) {
+  const merged = { ...base };
+  for (const [tag, value] of Object.entries(extra)) {
+    if (value !== undefined && value !== null && value !== ''
+      && (typeof value !== 'number' || Number.isFinite(value))) merged[tag] = value;
+  }
+  return merged;
+}
+
+async function parsePhotoExif(file: File) {
+  let parsed: Record<string, unknown> = {};
+  const readFromFile = async () => {
+    try {
+      parsed = mergeExifValues(parsed, (await exifr.parse(file, photoExifOptions)) || {});
+    } catch {
+      // Keep any values from a previous attempt.
+    }
+  };
+  const readFromBuffer = async () => {
+    try {
+      const buffer = await file.arrayBuffer();
+      const options = { pick: photoExifTags, silentErrors: false, chunked: false } as Parameters<typeof exifr.parse>[1];
+      parsed = mergeExifValues(parsed, (await exifr.parse(buffer, options)) || {});
+    } catch {
+      // The File-based reader may still work if whole-file reads fail.
+    }
+  };
+
+  // Small JPEGs are inexpensive to read once and avoid sliced File reads on
+  // Android content providers. Large photos and RAW files retain the fast path.
+  const bufferFirst = (/\.jpe?g$/i.test(file.name) || file.type === 'image/jpeg')
+    && file.size <= 16 * 1024 * 1024;
+  if (bufferFirst) await readFromBuffer();
+  else await readFromFile();
+
+  // A successful parse can still be incomplete. Retry that case too, and
+  // preserve useful fields rather than replacing them with an empty result.
+  if (!hasCoreExif(parsed)) {
+    if (bufferFirst) await readFromFile();
+    else await readFromBuffer();
+  }
+  return parsed;
+}
 function isSupportedPhoto(file: File) {
   return supportedPhotoPattern.test(file.name)
     || /image\/(?:jpeg|png|webp)/i.test(file.type)
@@ -335,7 +379,7 @@ function formatDate(value: unknown) {
 }
 
 function metadataFromExif(data: Record<string, unknown>): PhotoMeta {
-  const iso = data.ISO ?? data.PhotographicSensitivity ?? data.ISOSpeedRatings;
+  const iso = data.ISO ?? data.PhotographicSensitivity ?? data.ISOSpeedRatings ?? data.RecommendedExposureIndex;
   const isoNumber = finiteNumber(iso);
   return {
     make: String(data.Make || 'SONY').trim().toUpperCase(),
@@ -507,7 +551,7 @@ async function readPhotoFile(file: File) {
           rawPreview: false,
           cleanup: () => bitmap.close(),
         };
-        return { image, meta, hasExif: hasUsefulExif(parsed) };
+        return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
       } catch {
         try {
           const bitmap = await createImageBitmap(file);
@@ -519,7 +563,7 @@ async function readPhotoFile(file: File) {
             rawPreview: false,
             cleanup: () => bitmap.close(),
           };
-          return { image, meta, hasExif: hasUsefulExif(parsed) };
+          return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
         } catch {
           // Continue with the browser's native image decoder below.
         }
@@ -528,7 +572,7 @@ async function readPhotoFile(file: File) {
 
     try {
       const image = await loadNativeImageFile(file);
-      return { image, meta, hasExif: hasUsefulExif(parsed) };
+      return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
     } catch {
       throw new Error(`无法读取“${file.name}”，请确认它是完整的 JPG、PNG 或 WEBP 图片。`);
     }
@@ -537,7 +581,7 @@ async function readPhotoFile(file: File) {
   try {
     const orientation = await exifr.orientation(file).catch(() => undefined);
     const image = await loadLargestRawPreview(file, typeof orientation === 'number' ? orientation : 1);
-    return { image, meta, hasExif: hasUsefulExif(parsed) };
+    return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
   } catch {
     // Older RAW files may only expose the standard EXIF thumbnail.
   }
@@ -554,7 +598,7 @@ async function readPhotoFile(file: File) {
       rawPreview: true,
       cleanup: () => URL.revokeObjectURL(thumbnailUrl),
     };
-    return { image, meta, hasExif: hasUsefulExif(parsed) };
+    return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
   } catch {
     throw new Error(`无法读取“${file.name}”的 RAW 预览，请先将它转成 JPEG 再导入。`);
   }
@@ -896,6 +940,7 @@ function drawWatermark(
 
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const loadedRef = useRef<LoadedImage | null>(null);
   const [loaded, setLoaded] = useState<LoadedImage | null>(null);
@@ -918,6 +963,7 @@ export default function Home() {
   const [dragging, setDragging] = useState(false);
   const [status, setStatus] = useState('等待导入照片');
   const [error, setError] = useState('');
+  const [sourceFileInfo, setSourceFileInfo] = useState('');
 
   useEffect(() => {
     loadedRef.current = loaded;
@@ -953,6 +999,7 @@ export default function Home() {
     setBusy(true);
     setError('');
     setStatus('正在读取照片和 EXIF…');
+    setSourceFileInfo(`${file.name} · ${Math.round(file.size / 1000)} KB`);
     let nextImage: LoadedImage | null = null;
     try {
       const result = await readPhotoFile(file);
@@ -967,6 +1014,8 @@ export default function Home() {
         : 0;
       if (!result.hasExif) {
         setStatus('未检测到 EXIF · 请从文件管理器选择相机原始 JPG');
+      } else if (!result.hasCoreExif) {
+        setStatus(`已读取 ${found} 项 · 参数不完整，请用文件管理器重选`);
       } else {
         setStatus(nextImage.rawPreview
           ? `已读取 ${found} 项参数 · ARW 使用最大预览图`
@@ -1006,7 +1055,7 @@ export default function Home() {
     setDragging(false);
     const fallbackFiles = Array.from(event.dataTransfer.files || []);
     const entries = Array.from(event.dataTransfer.items || [])
-      .map((item) => (item as DataTransferItem & { webkitGetAsEntry?: () => DroppedEntry | null }).webkitGetAsEntry?.() || null)
+      .map((item) => (item as unknown as { webkitGetAsEntry?: () => DroppedEntry | null }).webkitGetAsEntry?.() || null)
       .filter((entry): entry is DroppedEntry => Boolean(entry));
     setError('');
     setStatus(entries.some((entry) => entry.isDirectory) ? '正在扫描文件夹中的照片…' : '正在读取照片…');
@@ -1126,6 +1175,10 @@ export default function Home() {
           </div>
 
           <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,.arw,.ARW" multiple hidden onChange={onInput} />
+          <input ref={documentInputRef} type="file" multiple hidden onChange={onInput} />
+          <button type="button" className="document-import-button" disabled={busy} onClick={() => documentInputRef.current?.click()}>
+            从文件管理器导入 <span>手机参数读不全时使用 ↗</span>
+          </button>
           <div
             className={`dropzone ${dragging ? 'dragging' : ''} ${loaded ? 'has-file' : ''}`}
             onClick={chooseFile}
@@ -1152,7 +1205,7 @@ export default function Home() {
 
           <div className="read-status">
             <span className={busy ? 'spinner' : 'status-icon'}>{busy ? '' : loaded ? '✓' : 'i'}</span>
-            <p><strong>{status}</strong>{loaded?.rawPreview && <small>已按相机方向自动转正；画质以 ARW 内嵌 JPEG 为准。</small>}</p>
+            <p><strong>{status}</strong>{sourceFileInfo && <small>{sourceFileInfo}</small>}{loaded?.rawPreview && <small>已按相机方向自动转正；画质以 ARW 内嵌 JPEG 为准。</small>}</p>
           </div>
           {error && <p className="error-message">{error}</p>}
 

@@ -114,6 +114,10 @@ button { color: inherit; }
 .upload-symbol { width: 34px; height: 34px; margin-bottom: 12px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--ink); font-size: 21px; font-weight: 300; }
 .dropzone strong { max-width: 94%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .dropzone span { margin-top: 6px; color: var(--muted); font-size: 11px; }
+.document-import-button { width: 100%; margin-bottom: 8px; padding: 10px 11px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 5px; border: 1px solid var(--line); background: #fff; cursor: pointer; font-size: 11px; font-weight: 700; text-align: left; }
+.document-import-button span { color: var(--muted); font-size: 9px; font-weight: 500; }
+.document-import-button:hover { border-color: var(--red); }
+.document-import-button:disabled { opacity: .5; cursor: not-allowed; }
 .batch-summary { margin-top: 8px; padding: 11px 12px; border-left: 3px solid var(--red); background: #f1f1ed; }
 .batch-summary > div { display: flex; align-items: center; justify-content: space-between; }
 .batch-summary strong { font-size: 11px; }
