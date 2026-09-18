@@ -261,4 +261,8 @@ footer a:focus-visible { outline: 1px solid var(--red); outline-offset: 5px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; }
 }
+.setting-note { font-size: 11px; line-height: 1.7; color: #777; margin: 9px 0 18px; }
+.preset-actions { margin-top: 8px; margin-bottom: 8px; }
+.settings-fields { margin: 0; padding: 0; border: 0; min-width: 0; }
+button:disabled { cursor: not-allowed; opacity: .5; }
 

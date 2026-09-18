@@ -2,6 +2,8 @@
 
 import exifr from 'exifr';
 import JSZip from 'jszip';
+import { attachJpegExif, rotationSize } from './photo-export';
+import { presetStorageKey, readPresets, WatermarkPreset } from './watermark-presets';
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 type WatermarkTheme = 'light' | 'dark';
@@ -757,7 +759,10 @@ function drawWatermark(
   holidayId: HolidayId,
   layoutMode: LayoutMode,
   visibility: ParameterVisibility,
+  rotation = 0,
 ) {
+  const original = image;
+  image = { ...image, ...rotationSize(image.width, image.height, rotation) };
   const width = image.width;
   // Keep the watermark visually consistent when the same sensor image is rotated.
   // Portrait photos otherwise used the short edge here and produced a much smaller band.
@@ -771,7 +776,11 @@ function drawWatermark(
   if (!ctx) return;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(image.source, 0, 0, width, image.height);
+  ctx.save();
+  ctx.translate(width / 2, image.height / 2);
+  ctx.rotate(rotation * Math.PI / 2);
+  ctx.drawImage(original.source, -original.width / 2, -original.height / 2, original.width, original.height);
+  ctx.restore();
   drawHolidayWatermark(ctx, width, image.height, scaleBase, holidayId);
 
   const background = theme === 'light' ? '#f8f8f6' : '#101113';
@@ -964,6 +973,24 @@ export default function Home() {
   const [status, setStatus] = useState('等待导入照片');
   const [error, setError] = useState('');
   const [sourceFileInfo, setSourceFileInfo] = useState('');
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [rotation, setRotation] = useState(0);
+  const [preserveExif, setPreserveExif] = useState(true);
+  const [removeGps, setRemoveGps] = useState(true);
+  const [presets, setPresets] = useState<WatermarkPreset[]>([]);
+  const [presetName, setPresetName] = useState('');
+  const [selectedPreset, setSelectedPreset] = useState('');
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        setPresets(readPresets(localStorage.getItem(presetStorageKey), parameterOptions.map((p) => p.key), holidayPresets.map((p) => p.id)));
+      } catch {
+        // Browsers with disabled storage can still process photos normally.
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     loadedRef.current = loaded;
@@ -971,9 +998,9 @@ export default function Home() {
 
   useEffect(() => {
     if (loaded && canvasRef.current) {
-      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility);
+      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation);
     }
-  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility]);
+  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation]);
 
   useEffect(() => {
     let active = true;
@@ -1007,6 +1034,8 @@ export default function Home() {
 
       loadedRef.current?.cleanup?.();
       setLoaded(nextImage);
+      setSourceFile(file);
+      setRotation(0);
       const nextMeta = result.meta;
       setMeta(nextMeta);
       const found = result.hasExif
@@ -1042,9 +1071,10 @@ export default function Home() {
     await importFile(photos[0]);
   }, [importFile]);
 
-  const chooseFile = () => inputRef.current?.click();
+  const chooseFile = () => { if (!busy) inputRef.current?.click(); };
 
   const onInput = (event: ChangeEvent<HTMLInputElement>) => {
+    if (busy) return;
     const files = Array.from(event.target.files || []);
     if (files.length) void importFiles(files);
     event.target.value = '';
@@ -1053,6 +1083,7 @@ export default function Home() {
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragging(false);
+    if (busy) return;
     const fallbackFiles = Array.from(event.dataTransfer.files || []);
     const entries = Array.from(event.dataTransfer.items || [])
       .map((item) => (item as unknown as { webkitGetAsEntry?: () => DroppedEntry | null }).webkitGetAsEntry?.() || null)
@@ -1072,11 +1103,16 @@ export default function Home() {
   const downloadSingle = async () => {
     const canvas = canvasRef.current;
     if (!canvas || !loaded) return;
+    setBusy(true);
+    setError('');
     const lossless = exportFormat === 'png';
     const label = lossless ? '原尺寸无损 PNG' : '原尺寸高画质 JPG';
+    const outputWidth = canvas.width;
+    const outputHeight = canvas.height;
     setStatus(`正在生成${label}…`);
     try {
-      const blob = await canvasToBlob(canvas, exportFormat);
+      let blob = await canvasToBlob(canvas, exportFormat);
+      if (exportFormat === 'jpeg' && preserveExif && sourceFile) blob = await attachJpegExif(blob, sourceFile, outputWidth, outputHeight, removeGps);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       const base = loaded.name.replace(/\.[^.]+$/, '');
@@ -1086,7 +1122,9 @@ export default function Home() {
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       setStatus(`${label}已导出`);
     } catch {
-      setError('导出失败，请重试。');
+      setError('导出失败，请重试；若拍摄信息写入失败，可关闭保留信息后导出。');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1107,8 +1145,9 @@ export default function Home() {
         const result = await readPhotoFile(file);
         batchImage = result.image;
         const outputCanvas = document.createElement('canvas');
-        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility);
-        const blob = await canvasToBlob(outputCanvas, exportFormat);
+        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation);
+        let blob = await canvasToBlob(outputCanvas, exportFormat);
+        if (exportFormat === 'jpeg' && preserveExif) blob = await attachJpegExif(blob, file, outputCanvas.width, outputCanvas.height, removeGps);
         const base = file.name.replace(/\.[^.]+$/, '');
         const sequence = String(index + 1).padStart(3, '0');
         zip.file(`${sequence}_${base}_ZVE10II_水印.${extension}`, blob);
@@ -1144,6 +1183,44 @@ export default function Home() {
   const setAllParameters = (visible: boolean) => {
     setParameterVisibility(Object.fromEntries(parameterOptions.map(({ key }) => [key, visible])) as ParameterVisibility);
   };
+
+  const persistPresets = (next: WatermarkPreset[]) => {
+    try {
+      localStorage.setItem(presetStorageKey, JSON.stringify(next));
+      setPresets(next);
+      setError('');
+      return true;
+    } catch {
+      setError('浏览器不允许保存预设，请检查隐私或存储设置。');
+      return false;
+    }
+  };
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name) { setError('请先给预设起个名字。'); return; }
+    if (presets.length >= 20 && !presets.some((p) => p.name === name)) { setError('最多保存 20 个预设，请先删除不用的预设。'); return; }
+    const preset: WatermarkPreset = { name, settings: { theme, detailMode, exportFormat, layoutMode, watermarkHeight, signature, accentColor, lensImageEnabled, holidayId, parameterVisibility: { ...parameterVisibility }, preserveExif, removeGps } };
+    if (persistPresets([...presets.filter((p) => p.name !== name), preset])) {
+      setSelectedPreset(name);
+      setStatus(`已保存预设“${name}” · 仅保存在当前浏览器`);
+    }
+  };
+  const applyPreset = () => {
+    const s = presets.find((p) => p.name === selectedPreset)?.settings;
+    if (!s) return;
+    setTheme(s.theme); setDetailMode(s.detailMode); setExportFormat(s.exportFormat); setLayoutMode(s.layoutMode);
+    setWatermarkHeight(s.watermarkHeight); setSignature(s.signature); setAccentColor(s.accentColor);
+    setLensImageEnabled(s.lensImageEnabled); setHolidayId(s.holidayId as HolidayId);
+    setParameterVisibility(s.parameterVisibility as ParameterVisibility); setPreserveExif(s.preserveExif); setRemoveGps(s.removeGps);
+    setPresetName(selectedPreset); setError(''); setStatus(`已应用预设“${selectedPreset}”`);
+  };
+  const deletePreset = () => {
+    if (!selectedPreset) return;
+    if (persistPresets(presets.filter((p) => p.name !== selectedPreset))) {
+      setSelectedPreset(''); setPresetName(''); setStatus('已删除所选预设');
+    }
+  };
+  const photoSize = loaded ? rotationSize(loaded.width, loaded.height, rotation) : null;
 
   return (
     <main className="app-shell">
@@ -1209,9 +1286,30 @@ export default function Home() {
           </div>
           {error && <p className="error-message">{error}</p>}
 
+          <label className="setting-label">照片旋转</label>
+          <div className="segmented">
+            <button disabled={!loaded || busy} onClick={() => setRotation((v) => (v + 3) % 4)}>↶ 向左 90°</button>
+            <button disabled={!loaded || busy} onClick={() => setRotation((v) => (v + 1) % 4)}>向右 90° ↷</button>
+            <button disabled={!loaded || busy || rotation === 0} onClick={() => setRotation(0)}>复原</button>
+          </div>
+          <p className="setting-note">在自动转正基础上旋转照片，不旋转水印。{batchFiles.length > 1 && '批量导出时应用于全部照片。'}</p>
+
           <div className="panel-heading settings-heading">
             <div><span className="step">02</span><h2>水印设置</h2></div>
           </div>
+          <fieldset className="settings-fields" disabled={busy}>
+          <label className="setting-label" htmlFor="preset-select">水印预设</label>
+          <select id="preset-select" className="signature-input" value={selectedPreset} onChange={(event) => setSelectedPreset(event.target.value)} disabled={busy}>
+            <option value="">选择已保存的预设</option>
+            {presets.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+          </select>
+          <div className="segmented preset-actions">
+            <button disabled={!selectedPreset || busy} onClick={applyPreset}>应用预设</button>
+            <button disabled={!selectedPreset || busy} onClick={deletePreset}>删除预设</button>
+          </div>
+          <input className="signature-input" aria-label="预设名称" placeholder="给当前设置起个名字" maxLength={40} value={presetName} onChange={(event) => setPresetName(event.target.value)} disabled={busy} />
+          <button className="document-import-button preset-actions" disabled={busy} onClick={savePreset}>保存当前设置 <span>同名保存会更新预设</span></button>
+          <p className="setting-note">保存颜色、署名、参数开关及导出设置；不保存照片、拍摄参数或旋转角度。</p>
           <label className="setting-label">底色</label>
           <div className="segmented">
             <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')}>象牙白</button>
@@ -1319,17 +1417,28 @@ export default function Home() {
             <button className={exportFormat === 'png' ? 'active' : ''} onClick={() => setExportFormat('png')}>无损 PNG</button>
           </div>
 
+          <label className="feature-switch">
+            <span><strong>保留拍摄信息（JPG）</strong><small>写入原始相机、镜头、曝光参数和拍摄时间</small></span>
+            <input type="checkbox" checked={preserveExif} disabled={exportFormat !== 'jpeg' || busy} onChange={(event) => setPreserveExif(event.target.checked)} />
+          </label>
+          <label className="feature-switch">
+            <span><strong>移除 GPS 位置</strong><small>默认移除；关闭后可保留原图的 GPS 坐标</small></span>
+            <input type="checkbox" checked={removeGps} disabled={exportFormat !== 'jpeg' || !preserveExif || busy} onChange={(event) => setRemoveGps(event.target.checked)} />
+          </label>
+          <p className="setting-note">{exportFormat === 'png' ? 'PNG 目前不写入 EXIF 拍摄信息。' : '仅保留原图已有的常用拍摄字段，不复制缩略图、序列号或厂商隐藏信息。手改水印不会更改原始记录。'}</p>
+
           <button className="export-button" disabled={!loaded || busy} onClick={download}>
             <span>{batchFiles.length > 1
               ? `批量导出 ${batchFiles.length} 张 ZIP`
               : exportFormat === 'png' ? '无损导出 PNG' : '高画质导出 JPG'}</span><b>→</b>
           </button>
+          </fieldset>
         </aside>
 
         <section className="preview-panel">
           <div className="preview-heading">
             <div><span className="step">03</span><h2>实时预览</h2></div>
-            <span>{loaded ? `${loaded.width} × ${loaded.height}px` : '等待照片'}</span>
+            <span>{photoSize ? `${photoSize.width} × ${photoSize.height}px` : '等待照片'}</span>
           </div>
           <div className="preview-stage">
             {loaded ? (
