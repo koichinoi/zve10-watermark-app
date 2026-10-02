@@ -3,6 +3,7 @@
 import exifr from 'exifr';
 import { CustomIcons, IconKind, customIconsStorageKey, fitArtwork, prepareCustomIcon, readCustomIcons, restoreCustomIcon } from './custom-icons';
 import JSZip from 'jszip';
+import { GearArtwork, gearGallery } from './gear-gallery';
 import { attachJpegExif, rotationSize } from './photo-export';
 import { batchMaxBytes, findEmbeddedJpegs, previewSize, readRasterSize, releaseCanvas } from './photo-processing';
 import { presetStorageKey, readPresets, WatermarkPreset } from './watermark-presets';
@@ -1084,6 +1085,21 @@ export default function Home() {
     finally { setBusy(false); }
   };
 
+  const chooseArtwork = async (artwork: GearArtwork) => {
+    if (busy || !iconsReady) return;
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch(new URL(artwork.src, window.location.href));
+      if (!response.ok) throw new Error('图库图片加载失败，请稍后重试。');
+      const blob = await response.blob();
+      const icon = await prepareCustomIcon(new File([blob], artwork.name, { type: blob.type }));
+      replaceIcon(artwork.kind, icon);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '图库图片加载失败，请稍后重试。');
+    } finally { setBusy(false); }
+  };
+
   const importFile = useCallback(async (file: File) => {
     if (!file) return;
     setBusy(true);
@@ -1481,6 +1497,19 @@ export default function Home() {
                     {icon && <button type="button" onClick={() => { setError(''); replaceIcon(kind, null); }}>恢复默认{label}图标</button>}
                   </div>
                 </div>
+                <details className="gear-gallery">
+                  <summary>从{label}图库选择</summary>
+                  <div className="gear-gallery-grid" aria-label={`${label}图库`}>
+                    {gearGallery.filter((artwork) => artwork.kind === kind).map((artwork) => (
+                      <button type="button" key={artwork.id} disabled={!iconsReady} aria-pressed={icon?.name === artwork.name} onClick={() => void chooseArtwork(artwork)}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={artwork.src} alt="" loading="lazy" width={96} height={72} />
+                        <span>{artwork.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="custom-icon-help">点选后用于所有照片；仅更换图片，不修改拍摄参数。产品照片保留原有背景。</p>
+                </details>
                 <input ref={iconInputs[kind]} type="file" accept="image/png,image/jpeg,image/webp" hidden aria-label={`${label}图标文件`} disabled={!iconsReady} onChange={(event) => void uploadIcon(kind, event)} />
               </div>
             );
