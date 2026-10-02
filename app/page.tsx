@@ -3,6 +3,7 @@
 import exifr from 'exifr';
 import JSZip from 'jszip';
 import { attachJpegExif, rotationSize } from './photo-export';
+import { batchMaxBytes, findEmbeddedJpegs, previewSize, readRasterSize, releaseCanvas } from './photo-processing';
 import { presetStorageKey, readPresets, WatermarkPreset } from './watermark-presets';
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from 'react';
 
@@ -420,7 +421,7 @@ async function loadNativeImageFile(file: File) {
       height: htmlImage.naturalHeight,
       name: file.name,
       rawPreview: false,
-      cleanup: () => URL.revokeObjectURL(objectUrl),
+      cleanup: () => { htmlImage.src = ''; URL.revokeObjectURL(objectUrl); },
     };
     return image;
   } catch (reason) {
@@ -429,52 +430,26 @@ async function loadNativeImageFile(file: File) {
   }
 }
 
-type EmbeddedJpeg = { start: number; end: number; width: number; height: number };
-
-function readEmbeddedJpegSize(bytes: Uint8Array, start: number, end: number) {
-  let offset = start + 2;
-  while (offset + 8 < end) {
-    while (offset < end && bytes[offset] !== 0xff) offset += 1;
-    while (offset < end && bytes[offset] === 0xff) offset += 1;
-    if (offset >= end) break;
-    const marker = bytes[offset];
-    offset += 1;
-    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) continue;
-    if (offset + 1 >= end) break;
-    const segmentLength = (bytes[offset] << 8) | bytes[offset + 1];
-    if (segmentLength < 2 || offset + segmentLength > end) break;
-    const isStartOfFrame = (marker >= 0xc0 && marker <= 0xc3)
-      || (marker >= 0xc5 && marker <= 0xc7)
-      || (marker >= 0xc9 && marker <= 0xcb)
-      || (marker >= 0xcd && marker <= 0xcf);
-    if (isStartOfFrame && segmentLength >= 7) {
-      const height = (bytes[offset + 3] << 8) | bytes[offset + 4];
-      const width = (bytes[offset + 5] << 8) | bytes[offset + 6];
-      return width > 0 && height > 0 ? { width, height } : null;
-    }
-    if (marker === 0xda) break;
-    offset += segmentLength;
+function compactLoadedImage(image: LoadedImage): LoadedImage {
+  const size = previewSize(image.width, image.height);
+  if (size.width === image.width && size.height === image.height) return image;
+  const canvas = document.createElement('canvas');
+  try {
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('无法生成预览，请减少照片尺寸后重试。');
+    ctx.drawImage(image.source, 0, 0, size.width, size.height);
+    return { ...image, source: canvas, cleanup: () => releaseCanvas(canvas) };
+  } catch (reason) {
+    releaseCanvas(canvas);
+    throw reason;
+  } finally {
+    image.cleanup?.();
   }
-  return null;
 }
 
-function findEmbeddedJpegs(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer);
-  const candidates: EmbeddedJpeg[] = [];
-  for (let start = 0; start + 10 < bytes.length; start += 1) {
-    if (bytes[start] !== 0xff || bytes[start + 1] !== 0xd8 || bytes[start + 2] !== 0xff) continue;
-    let end = start + 3;
-    while (end + 1 < bytes.length && !(bytes[end] === 0xff && bytes[end + 1] === 0xd9)) end += 1;
-    if (end + 1 >= bytes.length) continue;
-    end += 2;
-    const size = readEmbeddedJpegSize(bytes, start, end);
-    if (size) candidates.push({ start, end, ...size });
-    start = end - 1;
-  }
-  return candidates.sort((left, right) => (right.width * right.height) - (left.width * left.height));
-}
-
-function orientRawPreview(image: HTMLImageElement, orientation: number) {
+function orientRawPreview(image: HTMLImageElement, orientation: number, preview: boolean) {
   if (orientation < 2 || orientation > 8) return { source: image as CanvasImageSource, width: image.naturalWidth, height: image.naturalHeight };
   // Some browsers may already honor orientation stored inside the embedded JPEG.
   if (orientation >= 5 && image.naturalHeight > image.naturalWidth) {
@@ -484,27 +459,31 @@ function orientRawPreview(image: HTMLImageElement, orientation: number) {
   const sourceWidth = image.naturalWidth;
   const sourceHeight = image.naturalHeight;
   const swapsDimensions = orientation >= 5;
+  const width = swapsDimensions ? sourceHeight : sourceWidth;
+  const height = swapsDimensions ? sourceWidth : sourceHeight;
+  const size = preview ? previewSize(width, height) : { width, height };
   const canvas = document.createElement('canvas');
-  canvas.width = swapsDimensions ? sourceHeight : sourceWidth;
-  canvas.height = swapsDimensions ? sourceWidth : sourceHeight;
+  canvas.width = size.width;
+  canvas.height = size.height;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return { source: image as CanvasImageSource, width: sourceWidth, height: sourceHeight };
+  if (!ctx) { releaseCanvas(canvas); throw new Error('无法转正 RAW 预览'); }
+  ctx.scale(size.width / width, size.height / height);
 
   switch (orientation) {
-    case 2: ctx.setTransform(-1, 0, 0, 1, sourceWidth, 0); break;
-    case 3: ctx.setTransform(-1, 0, 0, -1, sourceWidth, sourceHeight); break;
-    case 4: ctx.setTransform(1, 0, 0, -1, 0, sourceHeight); break;
-    case 5: ctx.setTransform(0, 1, 1, 0, 0, 0); break;
-    case 6: ctx.setTransform(0, 1, -1, 0, sourceHeight, 0); break;
-    case 7: ctx.setTransform(0, -1, -1, 0, sourceHeight, sourceWidth); break;
-    case 8: ctx.setTransform(0, -1, 1, 0, 0, sourceWidth); break;
+    case 2: ctx.transform(-1, 0, 0, 1, sourceWidth, 0); break;
+    case 3: ctx.transform(-1, 0, 0, -1, sourceWidth, sourceHeight); break;
+    case 4: ctx.transform(1, 0, 0, -1, 0, sourceHeight); break;
+    case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+    case 6: ctx.transform(0, 1, -1, 0, sourceHeight, 0); break;
+    case 7: ctx.transform(0, -1, -1, 0, sourceHeight, sourceWidth); break;
+    case 8: ctx.transform(0, -1, 1, 0, 0, sourceWidth); break;
   }
   ctx.drawImage(image, 0, 0);
-  return { source: canvas as CanvasImageSource, width: canvas.width, height: canvas.height };
+  return { source: canvas as CanvasImageSource, width, height };
 }
 
-async function loadLargestRawPreview(file: File, orientation: number) {
-  const candidates = findEmbeddedJpegs(await file.arrayBuffer());
+async function loadLargestRawPreview(file: File, orientation: number, preview: boolean) {
+  const candidates = await findEmbeddedJpegs(file);
   for (const candidate of candidates.slice(0, 6)) {
     const objectUrl = URL.createObjectURL(file.slice(candidate.start, candidate.end, 'image/jpeg'));
     try {
@@ -513,14 +492,19 @@ async function loadLargestRawPreview(file: File, orientation: number) {
         URL.revokeObjectURL(objectUrl);
         continue;
       }
-      const oriented = orientRawPreview(htmlImage, orientation);
+      const oriented = orientRawPreview(htmlImage, orientation, preview);
+      if (oriented.source !== htmlImage) { htmlImage.src = ''; URL.revokeObjectURL(objectUrl); }
       const image: LoadedImage = {
         source: oriented.source,
         width: oriented.width,
         height: oriented.height,
         name: file.name,
         rawPreview: true,
-        cleanup: () => URL.revokeObjectURL(objectUrl),
+        cleanup: () => {
+          if (oriented.source instanceof HTMLCanvasElement) releaseCanvas(oriented.source);
+          htmlImage.src = '';
+          URL.revokeObjectURL(objectUrl);
+        },
       };
       return image;
     } catch {
@@ -530,7 +514,7 @@ async function loadLargestRawPreview(file: File, orientation: number) {
   throw new Error('missing large preview');
 }
 
-async function readPhotoFile(file: File) {
+async function readPhotoFile(file: File, preview = false) {
   const parsed = await parsePhotoExif(file);
   let meta: PhotoMeta;
   try {
@@ -542,30 +526,37 @@ async function readPhotoFile(file: File) {
   const isRaw = /\.arw$/i.test(file.name) || /sony.*raw/i.test(file.type);
 
   if (!isRaw) {
+    const dimensions = preview ? await readRasterSize(file) : null;
+    const orientation = typeof parsed.Orientation === 'number' ? parsed.Orientation
+      : dimensions ? await exifr.orientation(file).catch(() => 1) : 1;
+    const originalSize = dimensions && orientation && orientation >= 5 && orientation <= 8
+      ? { width: dimensions.height, height: dimensions.width } : dimensions;
+    const size = originalSize ? previewSize(originalSize.width, originalSize.height) : null;
+    const resize = size ? { resizeWidth: size.width, resizeHeight: size.height, resizeQuality: 'high' as const } : {};
     if (typeof createImageBitmap === 'function') {
       try {
-        const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+        const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image', ...resize });
         const image: LoadedImage = {
           source: bitmap,
-          width: bitmap.width,
-          height: bitmap.height,
+          width: originalSize?.width ?? bitmap.width,
+          height: originalSize?.height ?? bitmap.height,
           name: file.name,
           rawPreview: false,
           cleanup: () => bitmap.close(),
         };
-        return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+        return { image: preview && (!size || bitmap.width > size.width || bitmap.height > size.height) ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
       } catch {
         try {
-          const bitmap = await createImageBitmap(file);
+          const bitmap = await createImageBitmap(file, resize);
           const image: LoadedImage = {
             source: bitmap,
-            width: bitmap.width,
-            height: bitmap.height,
+            width: originalSize?.width ?? bitmap.width,
+            height: originalSize?.height ?? bitmap.height,
             name: file.name,
             rawPreview: false,
             cleanup: () => bitmap.close(),
           };
-          return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+          return { image: preview && (!size || bitmap.width > size.width || bitmap.height > size.height) ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
         } catch {
           // Continue with the browser's native image decoder below.
         }
@@ -574,16 +565,17 @@ async function readPhotoFile(file: File) {
 
     try {
       const image = await loadNativeImageFile(file);
-      return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+      return { image: preview ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
     } catch {
       throw new Error(`无法读取“${file.name}”，请确认它是完整的 JPG、PNG 或 WEBP 图片。`);
     }
   }
 
   try {
-    const orientation = await exifr.orientation(file).catch(() => undefined);
-    const image = await loadLargestRawPreview(file, typeof orientation === 'number' ? orientation : 1);
-    return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+    const orientation = typeof parsed.Orientation === 'number' ? parsed.Orientation
+      : await exifr.orientation(file).catch(() => undefined);
+    const image = await loadLargestRawPreview(file, typeof orientation === 'number' ? orientation : 1, preview);
+    return { image: preview && !(image.source instanceof HTMLCanvasElement) ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
   } catch {
     // Older RAW files may only expose the standard EXIF thumbnail.
   }
@@ -598,9 +590,9 @@ async function readPhotoFile(file: File) {
       height: htmlImage.naturalHeight,
       name: file.name,
       rawPreview: true,
-      cleanup: () => URL.revokeObjectURL(thumbnailUrl),
+      cleanup: () => { htmlImage.src = ''; URL.revokeObjectURL(thumbnailUrl); },
     };
-    return { image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+    return { image: preview ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
   } catch {
     throw new Error(`无法读取“${file.name}”的 RAW 预览，请先将它转成 JPEG 再导入。`);
   }
@@ -760,6 +752,7 @@ function drawWatermark(
   layoutMode: LayoutMode,
   visibility: ParameterVisibility,
   rotation = 0,
+  preview = false,
 ) {
   const original = image;
   image = { ...image, ...rotationSize(image.width, image.height, rotation) };
@@ -769,11 +762,13 @@ function drawWatermark(
   const scaleBase = Math.max(image.width, image.height);
   const bandHeight = Math.max(72, Math.round(scaleBase * heightPercent / 100));
   const canvasHeight = image.height + bandHeight;
-  canvas.width = width;
-  canvas.height = canvasHeight;
+  const size = preview ? previewSize(width, canvasHeight) : { width, height: canvasHeight };
+  canvas.width = size.width;
+  canvas.height = size.height;
 
   const ctx = canvas.getContext('2d');
-  if (!ctx) return;
+  if (!ctx) throw new Error('无法创建图片画布，请减少照片尺寸后重试。');
+  ctx.setTransform(size.width / width, 0, 0, size.height / canvasHeight, 0, 0);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.save();
@@ -998,7 +993,14 @@ export default function Home() {
 
   useEffect(() => {
     if (loaded && canvasRef.current) {
-      drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation);
+      const frame = window.requestAnimationFrame(() => {
+        try {
+          if (canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, true);
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : '预览生成失败');
+        }
+      });
+      return () => window.cancelAnimationFrame(frame);
     }
   }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation]);
 
@@ -1029,7 +1031,7 @@ export default function Home() {
     setSourceFileInfo(`${file.name} · ${Math.round(file.size / 1000)} KB`);
     let nextImage: LoadedImage | null = null;
     try {
-      const result = await readPhotoFile(file);
+      const result = await readPhotoFile(file, true);
       nextImage = result.image;
 
       loadedRef.current?.cleanup?.();
@@ -1100,29 +1102,54 @@ export default function Home() {
     setMeta((current) => ({ ...current, [key]: value }));
   };
 
+  const exportPhoto = async (file: File, editedMeta?: PhotoMeta) => {
+    const canvas = document.createElement('canvas');
+    let image: LoadedImage | null = null;
+    try {
+      // Let the status update paint before decoding and rendering a large photo.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      const result = await readPhotoFile(file);
+      image = result.image;
+      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation);
+      const width = canvas.width;
+      const height = canvas.height;
+      let blob = await canvasToBlob(canvas, exportFormat);
+      // Release both full-resolution rasters before metadata recovery reads.
+      releaseCanvas(canvas);
+      image.cleanup?.();
+      image = null;
+      if (exportFormat === 'jpeg' && preserveExif) blob = await attachJpegExif(blob, file, width, height, removeGps);
+      return blob;
+    } finally {
+      releaseCanvas(canvas);
+      image?.cleanup?.();
+    }
+  };
+
+  const saveDownload = (blob: Blob, name: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.download = name;
+    anchor.href = url;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  };
+
   const downloadSingle = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas || !loaded) return;
+    if (!loaded || !sourceFile) return;
     setBusy(true);
     setError('');
     const lossless = exportFormat === 'png';
     const label = lossless ? '原尺寸无损 PNG' : '原尺寸高画质 JPG';
-    const outputWidth = canvas.width;
-    const outputHeight = canvas.height;
     setStatus(`正在生成${label}…`);
     try {
-      let blob = await canvasToBlob(canvas, exportFormat);
-      if (exportFormat === 'jpeg' && preserveExif && sourceFile) blob = await attachJpegExif(blob, sourceFile, outputWidth, outputHeight, removeGps);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
+      const blob = await exportPhoto(sourceFile, meta);
       const base = loaded.name.replace(/\.[^.]+$/, '');
-      anchor.download = `${base}_ZVE10II_水印.${lossless ? 'png' : 'jpg'}`;
-      anchor.href = url;
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      saveDownload(blob, `${base}_ZVE10II_水印.${lossless ? 'png' : 'jpg'}`);
       setStatus(`${label}已导出`);
-    } catch {
-      setError('导出失败，请重试；若拍摄信息写入失败，可关闭保留信息后导出。');
+    } catch (reason) {
+      setStatus('导出失败');
+      setError(`${reason instanceof Error ? reason.message : '图片生成失败'}。可关闭保留拍摄信息后重试，或使用尺寸较小的照片、在电脑上导出。`);
     } finally {
       setBusy(false);
     }
@@ -1132,46 +1159,52 @@ export default function Home() {
     if (batchFiles.length < 2) return downloadSingle();
     setBusy(true);
     setError('');
-    const zip = new JSZip();
+    let zip: JSZip | null = new JSZip();
     const extension = exportFormat === 'png' ? 'png' : 'jpg';
     let completed = 0;
     let failed = 0;
-
-    for (let index = 0; index < batchFiles.length; index += 1) {
-      const file = batchFiles[index];
-      setStatus(`正在处理 ${index + 1}/${batchFiles.length} · ${file.name}`);
-      let batchImage: LoadedImage | null = null;
-      try {
-        const result = await readPhotoFile(file);
-        batchImage = result.image;
-        const outputCanvas = document.createElement('canvas');
-        drawWatermark(outputCanvas, batchImage, result.meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation);
-        let blob = await canvasToBlob(outputCanvas, exportFormat);
-        if (exportFormat === 'jpeg' && preserveExif) blob = await attachJpegExif(blob, file, outputCanvas.width, outputCanvas.height, removeGps);
-        const base = file.name.replace(/\.[^.]+$/, '');
-        const sequence = String(index + 1).padStart(3, '0');
-        zip.file(`${sequence}_${base}_ZVE10II_水印.${extension}`, blob);
-        completed += 1;
-      } catch {
-        failed += 1;
-      } finally {
-        batchImage?.cleanup?.();
-      }
-    }
+    let bytes = 0;
+    let remaining = 0;
+    let remainingName = '';
+    const failures: string[] = [];
 
     try {
+      for (let index = 0; index < batchFiles.length; index += 1) {
+        const file = batchFiles[index];
+        setStatus(`正在处理 ${index + 1}/${batchFiles.length} · ${file.name}`);
+        try {
+          const blob = await exportPhoto(file);
+          if (bytes + blob.size > batchMaxBytes) {
+            remaining = batchFiles.length - index;
+            remainingName = file.name;
+            setError(`本批导出结果较大，剩余 ${remaining} 张未处理，请从“${file.name}”开始分批导入，或改用 JPG 导出。`);
+            break;
+          }
+          const base = file.name.replace(/\.[^.]+$/, '');
+          const sequence = String(index + 1).padStart(3, '0');
+          zip.file(`${sequence}_${base}_ZVE10II_水印.${extension}`, blob);
+          bytes += blob.size;
+          completed += 1;
+        } catch {
+          failed += 1;
+          failures.push(file.name);
+        }
+      }
+      if (!completed) {
+        setStatus('没有照片成功导出');
+        if (!remaining) setError(`照片导出失败：${failures.join('、')}。请减少照片尺寸或关闭保留拍摄信息后重试。`);
+        return;
+      }
       setStatus(`正在打包 ${completed} 张照片…`);
-      const archive = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
-      const url = URL.createObjectURL(archive);
-      const anchor = document.createElement('a');
-      anchor.download = `ZVE10II_水印_${completed}张.zip`;
-      anchor.href = url;
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus(`批量导出完成：成功 ${completed} 张${failed ? `，失败 ${failed} 张` : ''}`);
+      const archive = await zip.generateAsync({ type: 'blob', compression: 'STORE', streamFiles: true });
+      zip = null;
+      saveDownload(archive, `ZVE10II_水印_${completed}张.zip`);
+      setStatus(`批量导出完成：成功 ${completed} 张${failed ? `，失败 ${failed} 张` : ''}${remaining ? `，未处理 ${remaining} 张` : ''}`);
+      if (failures.length) setError(`导出失败：${failures.join('、')}。${remaining ? `另有 ${remaining} 张未处理，请从“${remainingName}”开始分批导入。` : '请重选这些照片后重试。'}`);
     } catch {
       setError('压缩包生成失败，请减少照片数量后重试。');
     } finally {
+      zip = null;
       setBusy(false);
     }
   };
@@ -1276,7 +1309,7 @@ export default function Home() {
             <div className="batch-summary">
               <div><strong>批量模式</strong><span>{batchFiles.length} 张</span></div>
               <p>当前预览：{batchFiles[0].name}</p>
-              <small>导出时会逐张读取参数并打包为 ZIP。</small>
+              <small>导出时逐张处理并打包为 ZIP；结果较大时会提示分批导入。</small>
             </div>
           )}
 
