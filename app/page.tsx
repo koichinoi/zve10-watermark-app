@@ -1408,7 +1408,9 @@ export default function Home() {
             <div><span className="step">02</span><h2>水印设置</h2></div>
           </div>
           <fieldset className="settings-fields" disabled={busy}>
-          <label className="setting-label" htmlFor="preset-select">水印预设</label>
+          <details className="setting-group">
+            <summary>水印预设<span>{selectedPreset || '保存和切换常用设置'}</span></summary>
+          <label className="setting-label" htmlFor="preset-select">选择预设</label>
           <select id="preset-select" className="signature-input" value={selectedPreset} onChange={(event) => setSelectedPreset(event.target.value)} disabled={busy}>
             <option value="">选择已保存的预设</option>
             {presets.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
@@ -1420,6 +1422,7 @@ export default function Home() {
           <input className="signature-input" aria-label="预设名称" placeholder="给当前设置起个名字" maxLength={40} value={presetName} onChange={(event) => setPresetName(event.target.value)} disabled={busy} />
           <button className="document-import-button preset-actions" disabled={busy} onClick={savePreset}>保存当前设置 <span>同名保存会更新预设</span></button>
           <p className="setting-note">保存颜色、署名、参数开关及导出设置；不保存照片、拍摄参数或旋转角度。</p>
+          </details>
           <label className="setting-label">底色</label>
           <div className="segmented">
             <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')}>象牙白</button>
@@ -1465,7 +1468,8 @@ export default function Home() {
             </label>
           </div>
 
-          <label className="setting-label">节日水印</label>
+          <details className="setting-group">
+            <summary>节日水印<span>{activeHoliday.title}</span></summary>
           <div className="holiday-grid" aria-label="选择节日水印">
             {holidayPresets.map((preset) => (
               <button
@@ -1480,6 +1484,7 @@ export default function Home() {
             ))}
           </div>
 
+          </details>
           <label className="setting-label">相机／镜头图标</label>
           <p className="custom-icon-help">支持 PNG、JPG、WEBP，每张最多 10 MB。透明 PNG 效果更好；图标仅保存在当前浏览器，所有预设共用。</p>
           {(['camera', 'lens'] as const).map((kind) => {
@@ -1523,6 +1528,8 @@ export default function Home() {
             />
           </label>
 
+          <details className="setting-group">
+            <summary>参数显示<span>选择水印中的拍摄信息</span></summary>
           <div className="setting-label parameter-heading">
             <span>参数显示</span>
             <button onClick={() => setAllParameters(!allParametersVisible)}>{allParametersVisible ? '全部隐藏' : '全部显示'}</button>
@@ -1540,6 +1547,7 @@ export default function Home() {
             ))}
           </div>
 
+          </details>
           <label className="setting-label range-label"><span>水印高度</span><strong>{watermarkHeight.toFixed(1)}%</strong></label>
           <div className="range-setting">
             <input
@@ -1616,6 +1624,8 @@ export default function Home() {
             )}
           </div>
 
+          <details className="metadata-details">
+            <summary>拍摄参数<span>查看或修改自动读取的信息</span></summary>
           <div className="metadata-heading">
             <div><h2>拍摄参数</h2><span>自动读取后仍可手动修改</span></div>
             <button onClick={() => setMeta(demoMeta)}>填入示例</button>
@@ -1628,6 +1638,7 @@ export default function Home() {
               </label>
             ))}
           </div>
+          </details>
         </section>
       </div>
 
