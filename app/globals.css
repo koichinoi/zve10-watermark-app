@@ -204,7 +204,7 @@ button { color: inherit; }
 .sample-band.dark { color: #f7f7f4; background: #111214; }
 .sample-gear-photos { display: flex; align-items: center; gap: 7px; }
 .sample-camera-photo { width: 72px; height: 42px; position: relative; overflow: hidden; border: 1px solid rgba(120,120,120,.16); border-radius: 4px; }
-.sample-camera-photo img { position: absolute; width: 100%; height: 100%; left: 0; top: 0; object-fit: cover; }
+.sample-camera-photo img { position: absolute; width: 100%; height: 100%; left: 0; top: 0; object-fit: contain; }
 .sample-lens-photo { width: 49px; height: 42px; flex: none; display: grid; place-items: center; }
 .sample-lens-photo img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 2px 2px rgba(0,0,0,.14)); }
 .sample-brand { padding-left: 20px; border-left: 3px solid var(--red); min-width: 0; }
@@ -266,3 +266,22 @@ footer a:focus-visible { outline: 1px solid var(--red); outline-offset: 5px; }
 .settings-fields { margin: 0; padding: 0; border: 0; min-width: 0; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 
+.custom-icon-help { font-size: 11px; line-height: 1.7; color: #777; margin: 0 0 10px; }
+.custom-icon-card { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px; margin-bottom: 8px; border: 1px solid #e5e5e5; border-radius: 8px; }
+.custom-icon-thumbnail { width: 48px; height: 48px; padding: 3px; border-radius: 5px; background: repeating-conic-gradient(#eee 0% 25%, #fafafa 0% 50%) 0 / 12px 12px; }
+.custom-icon-thumbnail img { width: 100%; height: 100%; object-fit: contain; }
+.custom-icon-info { min-width: 0; }
+.custom-icon-info strong { display: block; font-size: 12px; }
+.custom-icon-info > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #777; margin: 3px 0 6px; }
+.custom-icon-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.custom-icon-actions button { font-size: 11px; padding: 5px 7px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer; }
+.custom-icon-actions button:disabled { opacity: .5; cursor: wait; }
+
+.gear-gallery { grid-column: 1 / -1; }
+.gear-gallery summary { font-size: 12px; cursor: pointer; padding: 6px 0; color: #4b4b4b; }
+.gear-gallery-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 5px 0 8px; }
+.gear-gallery-grid button { min-width: 0; padding: 6px 3px; background: #fff; border: 1px solid #e5e5e5; border-radius: 6px; cursor: pointer; }
+.gear-gallery-grid button[aria-pressed="true"] { border-color: #e11d2e; box-shadow: 0 0 0 1px #e11d2e; }
+.gear-gallery-grid button:disabled { opacity: .5; cursor: wait; }
+.gear-gallery-grid img { display: block; width: 100%; height: 54px; object-fit: contain; }
+.gear-gallery-grid span { display: block; font-size: 10px; line-height: 1.5; margin-top: 5px; overflow-wrap: anywhere; }

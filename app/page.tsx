@@ -1,7 +1,9 @@
 'use client';
 
 import exifr from 'exifr';
+import { CustomIcons, IconKind, customIconsStorageKey, fitArtwork, prepareCustomIcon, readCustomIcons, restoreCustomIcon } from './custom-icons';
 import JSZip from 'jszip';
+import { GearArtwork, gearGallery } from './gear-gallery';
 import { attachJpegExif, rotationSize } from './photo-export';
 import { batchMaxBytes, findEmbeddedJpegs, previewSize, readRasterSize, releaseCanvas } from './photo-processing';
 import { presetStorageKey, readPresets, WatermarkPreset } from './watermark-presets';
@@ -647,7 +649,8 @@ function cameraPhoto(
   ctx.clip();
   ctx.shadowColor = theme === 'light' ? 'rgba(20,20,24,.18)' : 'rgba(0,0,0,.45)';
   ctx.shadowBlur = height * 0.08;
-  ctx.drawImage(image, 0, 0, image.naturalWidth, image.naturalHeight, x, y, width, height);
+  const fitted = fitArtwork(image.naturalWidth, image.naturalHeight, width, height);
+  ctx.drawImage(image, x + (width - fitted.width) / 2, y + (height - fitted.height) / 2, fitted.width, fitted.height);
   ctx.restore();
 
   ctx.save();
@@ -753,6 +756,7 @@ function drawWatermark(
   visibility: ParameterVisibility,
   rotation = 0,
   preview = false,
+  customLensAsset: HTMLImageElement | null = null,
 ) {
   const original = image;
   image = { ...image, ...rotationSize(image.width, image.height, rotation) };
@@ -785,7 +789,7 @@ function drawWatermark(
   const padX = width * 0.045;
   ctx.fillStyle = background;
   ctx.fillRect(0, y0, width, bandHeight);
-  const matchedLensAsset = lensAssetForModel(meta.lens, compactLensAsset, zoom18135LensAsset);
+  const matchedLensAsset = customLensAsset ?? lensAssetForModel(meta.lens, compactLensAsset, zoom18135LensAsset);
 
   const isPortraitLayout = layoutMode === 'auto' && image.height > image.width;
   if (isPortraitLayout) {
@@ -807,8 +811,9 @@ function drawWatermark(
     if (cameraAsset) cameraPhoto(ctx, cameraAsset, portraitPad, cameraY, cameraWidth, cameraHeight, theme);
     else cameraGlyph(ctx, portraitPad, cameraY, cameraHeight, primary, accentColor);
 
-    const lensHeight = lensImageEnabled && matchedLensAsset ? cameraHeight * 0.92 : 0;
-    const lensWidth = matchedLensAsset ? lensHeight * (matchedLensAsset.naturalWidth / matchedLensAsset.naturalHeight) : 0;
+    const lensSize = lensImageEnabled && matchedLensAsset ? fitArtwork(matchedLensAsset.naturalWidth, matchedLensAsset.naturalHeight, width * 0.16, cameraHeight * 0.92) : { width: 0, height: 0 };
+    const lensHeight = lensSize.height;
+    const lensWidth = lensSize.width;
     const gearGap = lensHeight ? width * 0.01 : 0;
     if (matchedLensAsset && lensHeight) {
       lensPhoto(ctx, matchedLensAsset, portraitPad + cameraWidth + gearGap, contentTop + (topHeight - lensHeight) / 2, lensWidth, lensHeight, theme);
@@ -875,8 +880,9 @@ function drawWatermark(
   const cameraY = y0 + (bandHeight - cameraHeight) / 2;
   if (cameraAsset) cameraPhoto(ctx, cameraAsset, padX, cameraY, cameraWidth, cameraHeight, theme);
   else cameraGlyph(ctx, padX, cameraY, cameraHeight, primary, accentColor);
-  const lensHeight = lensImageEnabled && matchedLensAsset ? cameraHeight * 0.92 : 0;
-  const lensWidth = matchedLensAsset ? lensHeight * (matchedLensAsset.naturalWidth / matchedLensAsset.naturalHeight) : 0;
+  const lensSize = lensImageEnabled && matchedLensAsset ? fitArtwork(matchedLensAsset.naturalWidth, matchedLensAsset.naturalHeight, width * 0.18, cameraHeight * 0.92) : { width: 0, height: 0 };
+  const lensHeight = lensSize.height;
+  const lensWidth = lensSize.width;
   const gearGap = lensHeight ? width * 0.008 : 0;
   if (matchedLensAsset && lensHeight) {
     lensPhoto(ctx, matchedLensAsset, padX + cameraWidth + gearGap, y0 + (bandHeight - lensHeight) / 2, lensWidth, lensHeight, theme);
@@ -963,6 +969,14 @@ export default function Home() {
   const [cameraAsset, setCameraAsset] = useState<HTMLImageElement | null>(null);
   const [compactLensAsset, setCompactLensAsset] = useState<HTMLImageElement | null>(null);
   const [zoom18135LensAsset, setZoom18135LensAsset] = useState<HTMLImageElement | null>(null);
+  const cameraIconInput = useRef<HTMLInputElement>(null);
+  const lensIconInput = useRef<HTMLInputElement>(null);
+  const iconInputs = { camera: cameraIconInput, lens: lensIconInput };
+  const customIconsRef = useRef<CustomIcons>({ camera: null, lens: null });
+  const [customIcons, setCustomIcons] = useState<CustomIcons>({ camera: null, lens: null });
+  const [iconsReady, setIconsReady] = useState(false);
+  const activeCameraAsset = customIcons.camera?.image ?? cameraAsset;
+  const customLensAsset = customIcons.lens?.image ?? null;
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [status, setStatus] = useState('等待导入照片');
@@ -995,14 +1009,14 @@ export default function Home() {
     if (loaded && canvasRef.current) {
       const frame = window.requestAnimationFrame(() => {
         try {
-          if (canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, true);
+          if (canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, true, customLensAsset);
         } catch (reason) {
           setError(reason instanceof Error ? reason.message : '预览生成失败');
         }
       });
       return () => window.cancelAnimationFrame(frame);
     }
-  }, [loaded, meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation]);
+  }, [loaded, meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, customLensAsset]);
 
   useEffect(() => {
     let active = true;
@@ -1021,7 +1035,70 @@ export default function Home() {
     return () => { active = false; };
   }, []);
 
-  useEffect(() => () => loadedRef.current?.cleanup?.(), []);
+  useEffect(() => {
+    let active = true;
+    const restore = async () => {
+      const icons: CustomIcons = { camera: null, lens: null };
+      try {
+        const saved = readCustomIcons(localStorage.getItem(customIconsStorageKey));
+        for (const kind of ['camera', 'lens'] as const) {
+          if (saved[kind]) icons[kind] = await restoreCustomIcon(saved[kind]).catch(() => null);
+        }
+      } catch { /* Uploads still work when storage is disabled. */ }
+      if (!active) { Object.values(icons).forEach((icon) => icon?.cleanup()); return; }
+      customIconsRef.current = icons;
+      setCustomIcons(icons);
+      if (icons.lens) setLensImageEnabled(true);
+      setIconsReady(true);
+    };
+    void restore();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => () => {
+    loadedRef.current?.cleanup?.();
+    Object.values(customIconsRef.current).forEach((icon) => icon?.cleanup());
+  }, []);
+
+  const replaceIcon = (kind: IconKind, icon: CustomIcons[IconKind]) => {
+    customIconsRef.current[kind]?.cleanup();
+    const next = { ...customIconsRef.current, [kind]: icon };
+    customIconsRef.current = next;
+    setCustomIcons(next);
+    if (kind === 'lens' && icon) setLensImageEnabled(true);
+    try {
+      localStorage.setItem(customIconsStorageKey, JSON.stringify({
+        camera: next.camera && { name: next.camera.name, dataUrl: next.camera.dataUrl },
+        lens: next.lens && { name: next.lens.name, dataUrl: next.lens.dataUrl },
+      }));
+    } catch { setError('图标已应用，但浏览器无法保存设置；刷新后需要重新上传。'); }
+  };
+
+  const uploadIcon = async (kind: IconKind, event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || busy || !iconsReady) return;
+    setBusy(true);
+    setError('');
+    try { replaceIcon(kind, await prepareCustomIcon(file)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '图标读取失败，请更换图片。'); }
+    finally { setBusy(false); }
+  };
+
+  const chooseArtwork = async (artwork: GearArtwork) => {
+    if (busy || !iconsReady) return;
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch(new URL(artwork.src, window.location.href));
+      if (!response.ok) throw new Error('图库图片加载失败，请稍后重试。');
+      const blob = await response.blob();
+      const icon = await prepareCustomIcon(new File([blob], artwork.name, { type: blob.type }));
+      replaceIcon(artwork.kind, icon);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '图库图片加载失败，请稍后重试。');
+    } finally { setBusy(false); }
+  };
 
   const importFile = useCallback(async (file: File) => {
     if (!file) return;
@@ -1110,7 +1187,7 @@ export default function Home() {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       const result = await readPhotoFile(file);
       image = result.image;
-      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, cameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation);
+      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, false, customLensAsset);
       const width = canvas.width;
       const height = canvas.height;
       let blob = await canvasToBlob(canvas, exportFormat);
@@ -1403,9 +1480,42 @@ export default function Home() {
             ))}
           </div>
 
-          <label className="setting-label">镜头图片</label>
+          <label className="setting-label">相机／镜头图标</label>
+          <p className="custom-icon-help">支持 PNG、JPG、WEBP，每张最多 10 MB。透明 PNG 效果更好；图标仅保存在当前浏览器，所有预设共用。</p>
+          {(['camera', 'lens'] as const).map((kind) => {
+            const label = kind === 'camera' ? '相机' : '镜头';
+            const icon = customIcons[kind];
+            return (
+              <div className="custom-icon-card" key={kind}>
+                <div className="custom-icon-thumbnail">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={icon?.dataUrl ?? (kind === 'camera' ? 'zve10ii-camera-white-crop.png' : 'zve10ii-lens-white.png')} alt={`${label}图标`} />
+                </div>
+                <div className="custom-icon-info"><strong>{label}图标</strong><span title={icon?.name}>{icon?.name ?? (kind === 'camera' ? '默认相机图片' : '根据 EXIF 自动匹配')}</span>
+                  <div className="custom-icon-actions">
+                    <button type="button" disabled={!iconsReady} onClick={() => iconInputs[kind].current?.click()}>{icon ? '更换' : '上传'}{label}图标</button>
+                    {icon && <button type="button" onClick={() => { setError(''); replaceIcon(kind, null); }}>恢复默认{label}图标</button>}
+                  </div>
+                </div>
+                <details className="gear-gallery">
+                  <summary>从{label}图库选择</summary>
+                  <div className="gear-gallery-grid" aria-label={`${label}图库`}>
+                    {gearGallery.filter((artwork) => artwork.kind === kind).map((artwork) => (
+                      <button type="button" key={artwork.id} disabled={!iconsReady} aria-pressed={icon?.name === artwork.name} onClick={() => void chooseArtwork(artwork)}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={artwork.src} alt="" loading="lazy" width={96} height={72} />
+                        <span>{artwork.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="custom-icon-help">点选后用于所有照片；仅更换图片，不修改拍摄参数。产品照片保留原有背景。</p>
+                </details>
+                <input ref={iconInputs[kind]} type="file" accept="image/png,image/jpeg,image/webp" hidden aria-label={`${label}图标文件`} disabled={!iconsReady} onChange={(event) => void uploadIcon(kind, event)} />
+              </div>
+            );
+          })}
           <label className="feature-switch">
-            <span><strong>自动匹配镜头</strong><small>根据 EXIF 匹配 16-50 II 或 18-135 OSS</small></span>
+            <span><strong>显示镜头图标</strong><small>{customIcons.lens ? '使用自定义镜头图标' : '根据 EXIF 匹配 16-50 II 或 18-135 OSS'}</small></span>
             <input
               type="checkbox"
               checked={lensImageEnabled}
@@ -1460,7 +1570,7 @@ export default function Home() {
           </label>
           <p className="setting-note">{exportFormat === 'png' ? 'PNG 目前不写入 EXIF 拍摄信息。' : '仅保留原图已有的常用拍摄字段，不复制缩略图、序列号或厂商隐藏信息。手改水印不会更改原始记录。'}</p>
 
-          <button className="export-button" disabled={!loaded || busy} onClick={download}>
+          <button className="export-button" disabled={!loaded || busy || !iconsReady} onClick={download}>
             <span>{batchFiles.length > 1
               ? `批量导出 ${batchFiles.length} 张 ZIP`
               : exportFormat === 'png' ? '无损导出 PNG' : '高画质导出 JPG'}</span><b>→</b>
@@ -1490,12 +1600,12 @@ export default function Home() {
                   <div className="sample-gear-photos">
                     <div className="sample-camera-photo">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src="zve10ii-camera-white-crop.png" alt="白色 ZV-E10 II 相机" width={684} height={375} />
+                      <img src={customIcons.camera?.dataUrl ?? "zve10ii-camera-white-crop.png"} alt="相机图标" width={684} height={375} />
                     </div>
                     {lensImageEnabled && (
                       <div className="sample-lens-photo">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src="zve10ii-lens-white.png" alt="白色套机镜头" width={1402} height={1122} />
+                        <img src={customIcons.lens?.dataUrl ?? "zve10ii-lens-white.png"} alt="镜头图标" width={1402} height={1122} />
                       </div>
                     )}
                   </div>
