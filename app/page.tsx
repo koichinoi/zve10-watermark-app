@@ -1408,7 +1408,7 @@ export default function Home() {
             <div><span className="step">02</span><h2>水印设置</h2></div>
           </div>
           <fieldset className="settings-fields" disabled={busy}>
-          <details className="setting-group">
+          <details className="setting-group" open>
             <summary>水印预设<span>{selectedPreset || '保存和切换常用设置'}</span></summary>
           <label className="setting-label" htmlFor="preset-select">选择预设</label>
           <select id="preset-select" className="signature-input" value={selectedPreset} onChange={(event) => setSelectedPreset(event.target.value)} disabled={busy}>
@@ -1528,7 +1528,7 @@ export default function Home() {
             />
           </label>
 
-          <details className="setting-group">
+          <details className="setting-group" open>
             <summary>参数显示<span>选择水印中的拍摄信息</span></summary>
           <div className="setting-label parameter-heading">
             <span>参数显示</span>
