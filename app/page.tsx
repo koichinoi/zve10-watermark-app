@@ -5,13 +5,14 @@ import { CustomIcons, IconKind, customIconsStorageKey, fitArtwork, prepareCustom
 import JSZip from 'jszip';
 import { GearArtwork, gearGallery } from './gear-gallery';
 import { attachJpegExif, rotationSize } from './photo-export';
-import { batchMaxBytes, findEmbeddedJpegs, previewSize, readRasterSize, releaseCanvas } from './photo-processing';
+import { batchMaxBytes, findEmbeddedJpegs, fitLongEdge, previewSize, readRasterSize, releaseCanvas, watermarkOutputSize } from './photo-processing';
 import { presetStorageKey, readPresets, WatermarkPreset } from './watermark-presets';
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 type WatermarkTheme = 'light' | 'dark';
 type DetailMode = 'full' | 'compact';
 type ExportFormat = 'jpeg' | 'png';
+type ExportSize = 'original' | '2048' | '1080';
 type LayoutMode = 'auto' | 'landscape';
 type HolidayId = 'none' | 'new-year' | 'spring-festival' | 'lantern' | 'qingming' | 'labor-day' | 'dragon-boat' | 'mid-autumn' | 'national-day' | 'christmas';
 
@@ -432,8 +433,8 @@ async function loadNativeImageFile(file: File) {
   }
 }
 
-function compactLoadedImage(image: LoadedImage): LoadedImage {
-  const size = previewSize(image.width, image.height);
+function compactLoadedImage(image: LoadedImage, maxEdge = 0): LoadedImage {
+  const size = maxEdge ? fitLongEdge(image.width, image.height, maxEdge) : previewSize(image.width, image.height);
   if (size.width === image.width && size.height === image.height) return image;
   const canvas = document.createElement('canvas');
   try {
@@ -451,7 +452,7 @@ function compactLoadedImage(image: LoadedImage): LoadedImage {
   }
 }
 
-function orientRawPreview(image: HTMLImageElement, orientation: number, preview: boolean) {
+function orientRawPreview(image: HTMLImageElement, orientation: number, preview: boolean, maxEdge = 0) {
   if (orientation < 2 || orientation > 8) return { source: image as CanvasImageSource, width: image.naturalWidth, height: image.naturalHeight };
   // Some browsers may already honor orientation stored inside the embedded JPEG.
   if (orientation >= 5 && image.naturalHeight > image.naturalWidth) {
@@ -463,7 +464,7 @@ function orientRawPreview(image: HTMLImageElement, orientation: number, preview:
   const swapsDimensions = orientation >= 5;
   const width = swapsDimensions ? sourceHeight : sourceWidth;
   const height = swapsDimensions ? sourceWidth : sourceHeight;
-  const size = preview ? previewSize(width, height) : { width, height };
+  const size = preview ? previewSize(width, height) : fitLongEdge(width, height, maxEdge);
   const canvas = document.createElement('canvas');
   canvas.width = size.width;
   canvas.height = size.height;
@@ -484,7 +485,7 @@ function orientRawPreview(image: HTMLImageElement, orientation: number, preview:
   return { source: canvas as CanvasImageSource, width, height };
 }
 
-async function loadLargestRawPreview(file: File, orientation: number, preview: boolean) {
+async function loadLargestRawPreview(file: File, orientation: number, preview: boolean, maxEdge = 0) {
   const candidates = await findEmbeddedJpegs(file);
   for (const candidate of candidates.slice(0, 6)) {
     const objectUrl = URL.createObjectURL(file.slice(candidate.start, candidate.end, 'image/jpeg'));
@@ -494,7 +495,7 @@ async function loadLargestRawPreview(file: File, orientation: number, preview: b
         URL.revokeObjectURL(objectUrl);
         continue;
       }
-      const oriented = orientRawPreview(htmlImage, orientation, preview);
+      const oriented = orientRawPreview(htmlImage, orientation, preview, maxEdge);
       if (oriented.source !== htmlImage) { htmlImage.src = ''; URL.revokeObjectURL(objectUrl); }
       const image: LoadedImage = {
         source: oriented.source,
@@ -516,7 +517,7 @@ async function loadLargestRawPreview(file: File, orientation: number, preview: b
   throw new Error('missing large preview');
 }
 
-async function readPhotoFile(file: File, preview = false) {
+async function readPhotoFile(file: File, preview = false, maxEdge = 0) {
   const parsed = await parsePhotoExif(file);
   let meta: PhotoMeta;
   try {
@@ -528,12 +529,12 @@ async function readPhotoFile(file: File, preview = false) {
   const isRaw = /\.arw$/i.test(file.name) || /sony.*raw/i.test(file.type);
 
   if (!isRaw) {
-    const dimensions = preview ? await readRasterSize(file) : null;
+    const dimensions = preview || maxEdge ? await readRasterSize(file) : null;
     const orientation = typeof parsed.Orientation === 'number' ? parsed.Orientation
       : dimensions ? await exifr.orientation(file).catch(() => 1) : 1;
     const originalSize = dimensions && orientation && orientation >= 5 && orientation <= 8
       ? { width: dimensions.height, height: dimensions.width } : dimensions;
-    const size = originalSize ? previewSize(originalSize.width, originalSize.height) : null;
+    const size = originalSize ? (preview ? previewSize(originalSize.width, originalSize.height) : fitLongEdge(originalSize.width, originalSize.height, maxEdge)) : null;
     const resize = size ? { resizeWidth: size.width, resizeHeight: size.height, resizeQuality: 'high' as const } : {};
     if (typeof createImageBitmap === 'function') {
       try {
@@ -546,7 +547,7 @@ async function readPhotoFile(file: File, preview = false) {
           rawPreview: false,
           cleanup: () => bitmap.close(),
         };
-        return { image: preview && (!size || bitmap.width > size.width || bitmap.height > size.height) ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+        return { image: (preview || maxEdge > 0) && (!size || bitmap.width > size.width || bitmap.height > size.height) ? compactLoadedImage(image, preview ? 0 : maxEdge) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
       } catch {
         try {
           const bitmap = await createImageBitmap(file, resize);
@@ -558,7 +559,7 @@ async function readPhotoFile(file: File, preview = false) {
             rawPreview: false,
             cleanup: () => bitmap.close(),
           };
-          return { image: preview && (!size || bitmap.width > size.width || bitmap.height > size.height) ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+          return { image: (preview || maxEdge > 0) && (!size || bitmap.width > size.width || bitmap.height > size.height) ? compactLoadedImage(image, preview ? 0 : maxEdge) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
         } catch {
           // Continue with the browser's native image decoder below.
         }
@@ -567,7 +568,7 @@ async function readPhotoFile(file: File, preview = false) {
 
     try {
       const image = await loadNativeImageFile(file);
-      return { image: preview ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+      return { image: preview || maxEdge > 0 ? compactLoadedImage(image, preview ? 0 : maxEdge) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
     } catch {
       throw new Error(`无法读取“${file.name}”，请确认它是完整的 JPG、PNG 或 WEBP 图片。`);
     }
@@ -576,8 +577,8 @@ async function readPhotoFile(file: File, preview = false) {
   try {
     const orientation = typeof parsed.Orientation === 'number' ? parsed.Orientation
       : await exifr.orientation(file).catch(() => undefined);
-    const image = await loadLargestRawPreview(file, typeof orientation === 'number' ? orientation : 1, preview);
-    return { image: preview && !(image.source instanceof HTMLCanvasElement) ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+    const image = await loadLargestRawPreview(file, typeof orientation === 'number' ? orientation : 1, preview, maxEdge);
+    return { image: (preview || maxEdge > 0) && !(image.source instanceof HTMLCanvasElement) ? compactLoadedImage(image, preview ? 0 : maxEdge) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
   } catch {
     // Older RAW files may only expose the standard EXIF thumbnail.
   }
@@ -594,7 +595,7 @@ async function readPhotoFile(file: File, preview = false) {
       rawPreview: true,
       cleanup: () => { htmlImage.src = ''; URL.revokeObjectURL(thumbnailUrl); },
     };
-    return { image: preview ? compactLoadedImage(image) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
+    return { image: preview || maxEdge > 0 ? compactLoadedImage(image, preview ? 0 : maxEdge) : image, meta, hasExif: hasUsefulExif(parsed), hasCoreExif: hasCoreExif(parsed) };
   } catch {
     throw new Error(`无法读取“${file.name}”的 RAW 预览，请先将它转成 JPEG 再导入。`);
   }
@@ -757,6 +758,7 @@ function drawWatermark(
   rotation = 0,
   preview = false,
   customLensAsset: HTMLImageElement | null = null,
+  maxEdge = 0,
 ) {
   const original = image;
   image = { ...image, ...rotationSize(image.width, image.height, rotation) };
@@ -766,7 +768,7 @@ function drawWatermark(
   const scaleBase = Math.max(image.width, image.height);
   const bandHeight = Math.max(72, Math.round(scaleBase * heightPercent / 100));
   const canvasHeight = image.height + bandHeight;
-  const size = preview ? previewSize(width, canvasHeight) : { width, height: canvasHeight };
+  const size = preview ? previewSize(width, canvasHeight) : watermarkOutputSize(original.width, original.height, heightPercent, rotation, maxEdge);
   canvas.width = size.width;
   canvas.height = size.height;
 
@@ -958,6 +960,8 @@ export default function Home() {
   const [theme, setTheme] = useState<WatermarkTheme>('light');
   const [detailMode, setDetailMode] = useState<DetailMode>('full');
   const [exportFormat, setExportFormat] = useState<ExportFormat>('jpeg');
+  const [exportSize, setExportSize] = useState<ExportSize>('original');
+  const exportMaxEdge = exportSize === 'original' ? 0 : Number(exportSize);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('auto');
   const [watermarkHeight, setWatermarkHeight] = useState(12.5);
   const [signature, setSignature] = useState('');
@@ -1185,9 +1189,9 @@ export default function Home() {
     try {
       // Let the status update paint before decoding and rendering a large photo.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      const result = await readPhotoFile(file);
+      const result = await readPhotoFile(file, false, exportMaxEdge);
       image = result.image;
-      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, false, customLensAsset);
+      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, false, customLensAsset, exportMaxEdge);
       const width = canvas.width;
       const height = canvas.height;
       let blob = await canvasToBlob(canvas, exportFormat);
@@ -1217,7 +1221,7 @@ export default function Home() {
     setBusy(true);
     setError('');
     const lossless = exportFormat === 'png';
-    const label = lossless ? '原尺寸无损 PNG' : '原尺寸高画质 JPG';
+    const label = exportMaxEdge ? `分享${lossless ? ' PNG' : ' JPG'}（长边不超过 ${exportMaxEdge}px）` : lossless ? '原尺寸无损 PNG' : '原尺寸高画质 JPG';
     setStatus(`正在生成${label}…`);
     try {
       const blob = await exportPhoto(sourceFile, meta);
@@ -1309,7 +1313,7 @@ export default function Home() {
     const name = presetName.trim();
     if (!name) { setError('请先给预设起个名字。'); return; }
     if (presets.length >= 20 && !presets.some((p) => p.name === name)) { setError('最多保存 20 个预设，请先删除不用的预设。'); return; }
-    const preset: WatermarkPreset = { name, settings: { theme, detailMode, exportFormat, layoutMode, watermarkHeight, signature, accentColor, lensImageEnabled, holidayId, parameterVisibility: { ...parameterVisibility }, preserveExif, removeGps } };
+    const preset: WatermarkPreset = { name, settings: { theme, detailMode, exportFormat, exportSize, layoutMode, watermarkHeight, signature, accentColor, lensImageEnabled, holidayId, parameterVisibility: { ...parameterVisibility }, preserveExif, removeGps } };
     if (persistPresets([...presets.filter((p) => p.name !== name), preset])) {
       setSelectedPreset(name);
       setStatus(`已保存预设“${name}” · 仅保存在当前浏览器`);
@@ -1318,7 +1322,7 @@ export default function Home() {
   const applyPreset = () => {
     const s = presets.find((p) => p.name === selectedPreset)?.settings;
     if (!s) return;
-    setTheme(s.theme); setDetailMode(s.detailMode); setExportFormat(s.exportFormat); setLayoutMode(s.layoutMode);
+    setTheme(s.theme); setDetailMode(s.detailMode); setExportFormat(s.exportFormat); setExportSize(s.exportSize); setLayoutMode(s.layoutMode);
     setWatermarkHeight(s.watermarkHeight); setSignature(s.signature); setAccentColor(s.accentColor);
     setLensImageEnabled(s.lensImageEnabled); setHolidayId(s.holidayId as HolidayId);
     setParameterVisibility(s.parameterVisibility as ParameterVisibility); setPreserveExif(s.preserveExif); setRemoveGps(s.removeGps);
@@ -1331,6 +1335,7 @@ export default function Home() {
     }
   };
   const photoSize = loaded ? rotationSize(loaded.width, loaded.height, rotation) : null;
+  const outputSize = loaded ? watermarkOutputSize(loaded.width, loaded.height, watermarkHeight, rotation, exportMaxEdge) : null;
 
   return (
     <main className="app-shell">
@@ -1561,6 +1566,14 @@ export default function Home() {
             />
             <div><span>低</span><span>高</span></div>
           </div>
+
+          <label className="setting-label" htmlFor="export-size">导出尺寸</label>
+          <select id="export-size" className="signature-input" value={exportSize} onChange={(event) => setExportSize(event.target.value as ExportSize)}>
+            <option value="original">原尺寸</option>
+            <option value="2048">分享大图 · 长边 2048px</option>
+            <option value="1080">分享小图 · 长边 1080px</option>
+          </select>
+          <p className="setting-note">{outputSize && `导出 ${outputSize.width} × ${outputSize.height}px。`}{exportMaxEdge ? '尺寸包含水印，保持比例，小图不放大。' : '保留原始照片像素并添加水印条。'}{batchFiles.length > 1 && '此处显示当前照片的尺寸，批量按每张照片分别计算。'}</p>
 
           <label className="setting-label">导出格式</label>
           <div className="segmented">

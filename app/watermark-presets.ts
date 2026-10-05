@@ -4,6 +4,7 @@ export type PresetSettings = {
   theme: 'light' | 'dark';
   detailMode: 'full' | 'compact';
   exportFormat: 'jpeg' | 'png';
+  exportSize: 'original' | '2048' | '1080';
   layoutMode: 'auto' | 'landscape';
   watermarkHeight: number;
   signature: string;
@@ -39,6 +40,7 @@ export function readPresets(value: string | null, parameterKeys: string[], holid
       // Explicit whitelist: photos, metadata, GPS and rotations are not presets.
       settings: {
         theme: settings.theme, detailMode: settings.detailMode, exportFormat: settings.exportFormat,
+        exportSize: settings.exportSize === '2048' || settings.exportSize === '1080' ? settings.exportSize : 'original',
         layoutMode: settings.layoutMode, watermarkHeight: settings.watermarkHeight,
         signature: settings.signature, accentColor: settings.accentColor,
         lensImageEnabled: settings.lensImageEnabled, holidayId: settings.holidayId,

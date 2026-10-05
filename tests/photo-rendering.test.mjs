@@ -42,7 +42,7 @@ function exporter(failAt, editedMeta) {
       assert.equal(width, 6192); assert.equal(height, 4902);
       metadataCount += 1; fail('metadata'); return blob;
     },
-    exportFormat: 'jpeg', preserveExif: true, removeGps: true,
+    exportFormat: 'jpeg', exportMaxEdge: 0, preserveExif: true, removeGps: true,
     theme: 'light', detailMode: 'full', watermarkHeight: 12.5, activeCameraAsset: null, customLensAsset: null,
     compactLensAsset: null, zoom18135LensAsset: null, signature: '', accentColor: '#ffffff',
     lensImageEnabled: false, holidayId: 'none', layoutMode: 'auto', parameterVisibility: {}, rotation: 0,

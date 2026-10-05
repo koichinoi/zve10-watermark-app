@@ -11,6 +11,19 @@ export function previewSize(width: number, height: number): Size {
   return { width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)) };
 }
 
+// Bound the complete exported image without enlarging small originals.
+export function fitLongEdge(width: number, height: number, maxEdge = 0): Size {
+  const scale = maxEdge > 0 ? Math.min(1, maxEdge / Math.max(width, height)) : 1;
+  return { width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)) };
+}
+
+export function watermarkOutputSize(width: number, height: number, heightPercent: number, rotation = 0, maxEdge = 0): Size {
+  const band = Math.max(72, Math.round(Math.max(width, height) * heightPercent / 100));
+  return rotation % 2
+    ? fitLongEdge(height, width + band, maxEdge)
+    : fitLongEdge(width, height + band, maxEdge);
+}
+
 export function releaseCanvas(canvas: HTMLCanvasElement) {
   canvas.width = 0;
   canvas.height = 0;
