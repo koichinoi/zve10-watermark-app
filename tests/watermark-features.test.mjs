@@ -78,7 +78,7 @@ test('empty metadata does not invent a camera or exposure', async () => {
   assert.equal(result.Orientation, 1);
 });
 
-const settings = { theme: 'dark', detailMode: 'compact', exportFormat: 'jpeg', layoutMode: 'auto',
+const settings = { theme: 'dark', detailMode: 'compact', exportFormat: 'jpeg', exportSize: 'original', layoutMode: 'auto',
   watermarkHeight: 15, signature: 'PHOTO BY ME', accentColor: '#3976d5', lensImageEnabled: true,
   holidayId: 'none', parameterVisibility: { lens: true, date: false }, preserveExif: true, removeGps: true };
 test('presets restore settings and discard photos, GPS and rotation', () => {
@@ -89,6 +89,21 @@ test('corrupt or invalid presets fail safely', () => {
   assert.deepEqual(readPresets('not json', ['lens'], ['none']), []);
   assert.deepEqual(readPresets(JSON.stringify([{ name: 'bad', settings: { ...settings, watermarkHeight: 999 } }]), ['lens'], ['none']), []);
   assert.deepEqual(readPresets(JSON.stringify([{ name: 'bad', settings: { ...settings, parameterVisibility: {} } }]), ['lens'], ['none']), []);
+});
+test('legacy presets without an export size retain their settings and use original size', () => {
+  const legacySettings = { ...settings };
+  delete legacySettings.exportSize;
+  const result = readPresets(JSON.stringify([{ name: '旧预设', settings: legacySettings }]), ['lens', 'date'], ['none']);
+  assert.deepEqual(result, [{ name: '旧预设', settings }]);
+});
+test('presets retain supported share sizes and safely default invalid sizes', () => {
+  const values = ['2048', '1080', 'original', '4096', 2048, null, { value: '1080' }];
+  const input = values.map((exportSize, index) => ({ name: `尺寸 ${index}`, settings: { ...settings, exportSize } }));
+  const result = readPresets(JSON.stringify(input), ['lens', 'date'], ['none']);
+  assert.deepEqual(result, input.map((preset, index) => ({
+    name: preset.name,
+    settings: { ...settings, exportSize: index < 2 ? values[index] : 'original' },
+  })));
 });
 test('quarter turns swap dimensions and a full turn restores them', () => {
   assert.deepEqual(rotationSize(6192, 4128, 1), { width: 4128, height: 6192 });
