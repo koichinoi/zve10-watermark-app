@@ -1,8 +1,9 @@
 'use client';
 
 import exifr from 'exifr';
-import { CustomIcons, IconKind, customIconsStorageKey, fitArtwork, prepareCustomIcon, readCustomIcons, restoreCustomIcon } from './custom-icons';
+import { CustomIcons, IconCropSource, IconKind, customIconsStorageKey, fitArtwork, loadIconForCropping, readCustomIcons, restoreCustomIcon } from './custom-icons';
 import JSZip from 'jszip';
+import IconCropDialog from './icon-crop-dialog';
 import { GearArtwork, gearGallery } from './gear-gallery';
 import { attachJpegExif, rotationSize } from './photo-export';
 import { batchMaxBytes, findEmbeddedJpegs, fitLongEdge, previewSize, readRasterSize, releaseCanvas, watermarkOutputSize } from './photo-processing';
@@ -979,6 +980,8 @@ export default function Home() {
   const customIconsRef = useRef<CustomIcons>({ camera: null, lens: null });
   const [customIcons, setCustomIcons] = useState<CustomIcons>({ camera: null, lens: null });
   const [iconsReady, setIconsReady] = useState(false);
+  const [pendingIcon, setPendingIcon] = useState<{ kind: IconKind; source: IconCropSource } | null>(null);
+  useEffect(() => () => { pendingIcon?.source.cleanup(); }, [pendingIcon]);
   const activeCameraAsset = customIcons.camera?.image ?? cameraAsset;
   const customLensAsset = customIcons.lens?.image ?? null;
   const [busy, setBusy] = useState(false);
@@ -1084,7 +1087,7 @@ export default function Home() {
     if (!file || busy || !iconsReady) return;
     setBusy(true);
     setError('');
-    try { replaceIcon(kind, await prepareCustomIcon(file)); }
+    try { setPendingIcon({ kind, source: await loadIconForCropping(file) }); }
     catch (reason) { setError(reason instanceof Error ? reason.message : '图标读取失败，请更换图片。'); }
     finally { setBusy(false); }
   };
@@ -1097,8 +1100,8 @@ export default function Home() {
       const response = await fetch(new URL(artwork.src, window.location.href));
       if (!response.ok) throw new Error('图库图片加载失败，请稍后重试。');
       const blob = await response.blob();
-      const icon = await prepareCustomIcon(new File([blob], artwork.name, { type: blob.type }));
-      replaceIcon(artwork.kind, icon);
+      const source = await loadIconForCropping(new File([blob], artwork.name, { type: blob.type }));
+      setPendingIcon({ kind: artwork.kind, source });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '图库图片加载失败，请稍后重试。');
     } finally { setBusy(false); }
@@ -1491,7 +1494,7 @@ export default function Home() {
 
           </details>
           <label className="setting-label">相机／镜头图标</label>
-          <p className="custom-icon-help">支持 PNG、JPG、WEBP，每张最多 10 MB。透明 PNG 效果更好；图标仅保存在当前浏览器，所有预设共用。</p>
+          <p className="custom-icon-help">支持 PNG、JPG、WEBP，每张最多 10 MB。上传后可自动裁边并调整范围；透明 PNG 效果更好。图标仅保存在当前浏览器，所有预设共用。</p>
           {(['camera', 'lens'] as const).map((kind) => {
             const label = kind === 'camera' ? '相机' : '镜头';
             const icon = customIcons[kind];
@@ -1518,7 +1521,7 @@ export default function Home() {
                       </button>
                     ))}
                   </div>
-                  <p className="custom-icon-help">点选后用于所有照片；仅更换图片，不修改拍摄参数。产品照片保留原有背景。</p>
+                  <p className="custom-icon-help">点选后可裁剪，应用后用于所有照片。产品照片保留原有背景。</p>
                 </details>
                 <input ref={iconInputs[kind]} type="file" accept="image/png,image/jpeg,image/webp" hidden aria-label={`${label}图标文件`} disabled={!iconsReady} onChange={(event) => void uploadIcon(kind, event)} />
               </div>
@@ -1655,6 +1658,7 @@ export default function Home() {
         </section>
       </div>
 
+      {pendingIcon && <IconCropDialog source={pendingIcon.source} label={pendingIcon.kind === 'camera' ? '相机' : '镜头'} onCancel={() => setPendingIcon(null)} onApply={(icon) => { replaceIcon(pendingIcon.kind, icon); setPendingIcon(null); }} />}
       <footer>
         <div>BUILT FOR SONY ZV-E10 II <span>·</span> JPG / LOSSLESS PNG <span>·</span> ORIGINAL RESOLUTION</div>
         <a
