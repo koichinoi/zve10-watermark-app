@@ -11,3 +11,5 @@ These product photographs are from Sony Japan product pages. Copyright in the ph
 | e-16-55-f28.jpg | https://www.sony.jp/ichigan/products/SEL1655G/ | https://www.sony.jp/products/picture/SEL1655G.jpg |
 
 The ZV-E10 II, 16-50 II and 18-135 images are reused from the project's existing assets outside this directory.
+
+Transparent lens variants (*-transparent.png) were edited from the corresponding Sony JPEG above using built-in imagegen on 2026-11-01, then resized to 512 pixels wide. Original JPEGs are retained as references. Prompt: remove only the white background to true alpha; preserve lens shape, lettering, details, color, angle and proportions, without adding shadows. Generated edits may differ in fine details from original product photographs.
