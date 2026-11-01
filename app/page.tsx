@@ -4,6 +4,7 @@ import exifr from 'exifr';
 import { CustomIcons, IconCropSource, IconKind, customIconsStorageKey, fitArtwork, loadIconForCropping, readCustomIcons, restoreCustomIcon } from './custom-icons';
 import JSZip from 'jszip';
 import IconCropDialog from './icon-crop-dialog';
+import BatchPhotoList from './batch-photo-list';
 import { GearArtwork, gearGallery } from './gear-gallery';
 import { attachJpegExif, rotationSize } from './photo-export';
 import { batchMaxBytes, findEmbeddedJpegs, fitLongEdge, previewSize, readRasterSize, releaseCanvas, watermarkOutputSize } from './photo-processing';
@@ -971,6 +972,10 @@ export default function Home() {
   const [holidayId, setHolidayId] = useState<HolidayId>('none');
   const [parameterVisibility, setParameterVisibility] = useState<ParameterVisibility>(defaultParameterVisibility);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
+  const [photoEdits, setPhotoEdits] = useState(new Map<File, { rotation: number; meta?: PhotoMeta }>());
+  const photoEditsRef = useRef(photoEdits);
+  const thumbnailTaskRef = useRef<Promise<string> | null>(null);
+  const [photoListVersion, setPhotoListVersion] = useState(0);
   const [cameraAsset, setCameraAsset] = useState<HTMLImageElement | null>(null);
   const [compactLensAsset, setCompactLensAsset] = useState<HTMLImageElement | null>(null);
   const [zoom18135LensAsset, setZoom18135LensAsset] = useState<HTMLImageElement | null>(null);
@@ -1112,17 +1117,20 @@ export default function Home() {
     setBusy(true);
     setError('');
     setStatus('正在读取照片和 EXIF…');
-    setSourceFileInfo(`${file.name} · ${Math.round(file.size / 1000)} KB`);
     let nextImage: LoadedImage | null = null;
     try {
+      await thumbnailTaskRef.current?.catch(() => undefined);
       const result = await readPhotoFile(file, true);
       nextImage = result.image;
 
       loadedRef.current?.cleanup?.();
+      loadedRef.current = nextImage;
       setLoaded(nextImage);
       setSourceFile(file);
-      setRotation(0);
-      const nextMeta = result.meta;
+      setSourceFileInfo(`${file.name} · ${Math.round(file.size / 1000)} KB`);
+      const saved = photoEditsRef.current.get(file);
+      setRotation(saved?.rotation ?? 0);
+      const nextMeta = saved?.meta ?? result.meta;
       setMeta(nextMeta);
       const found = result.hasExif
         ? fields.filter(({ key }) => nextMeta[key] && nextMeta[key] !== '—').length
@@ -1148,14 +1156,71 @@ export default function Home() {
   const importFiles = useCallback(async (files: File[]) => {
     const photos = files.filter(isSupportedPhoto);
     if (!photos.length) {
-      setBatchFiles([]);
       setError('没有找到可读取的照片，请导入 JPG、PNG、WEBP 或 ARW 文件。');
       setStatus('未找到照片');
       return;
     }
+    loadedRef.current?.cleanup?.(); loadedRef.current = null;
+    setLoaded(null); setSourceFile(null); setSourceFileInfo(''); setRotation(0); setMeta(demoMeta);
+    const edits = new Map<File, { rotation: number; meta?: PhotoMeta }>();
+    photoEditsRef.current = edits; setPhotoEdits(edits);
+    setPhotoListVersion((value) => value + 1);
     setBatchFiles(photos);
     await importFile(photos[0]);
   }, [importFile]);
+
+  const makePhotoThumbnail = useCallback((file: File, signal: AbortSignal) => {
+    const previous = thumbnailTaskRef.current;
+    const task = (async () => {
+      await previous?.catch(() => undefined);
+      if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      let image: LoadedImage | null = null;
+      const canvas = document.createElement('canvas');
+      try {
+        const result = await readPhotoFile(file, false, 200);
+        image = result.image;
+        if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+        const size = fitLongEdge(image.width, image.height, 200);
+        canvas.width = size.width; canvas.height = size.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('缩略图生成失败');
+        ctx.fillStyle = '#eeeeea'; ctx.fillRect(0, 0, size.width, size.height);
+        ctx.drawImage(image.source, 0, 0, size.width, size.height);
+        return canvas.toDataURL('image/jpeg', .8);
+      } finally { image?.cleanup?.(); releaseCanvas(canvas); }
+    })();
+    thumbnailTaskRef.current = task;
+    return task;
+  }, []);
+
+  const recordPhotoEdit = (file: File, changes: { rotation?: number; meta?: PhotoMeta }) => {
+    const next = new Map(photoEditsRef.current);
+    next.set(file, { rotation: 0, ...next.get(file), ...changes });
+    photoEditsRef.current = next; setPhotoEdits(next);
+  };
+  const setPhotoRotation = (value: number) => {
+    setRotation(value);
+    if (sourceFile) recordPhotoEdit(sourceFile, { rotation: value });
+  };
+  const replacePhotoMeta = (value: PhotoMeta) => {
+    setMeta(value);
+    if (sourceFile) recordPhotoEdit(sourceFile, { meta: value });
+  };
+  const selectPhoto = (file: File) => { if (!busy && file !== sourceFile) void importFile(file); };
+  const removePhoto = async (file: File) => {
+    if (busy) return;
+    const index = batchFiles.indexOf(file);
+    const remaining = batchFiles.filter((item) => item !== file);
+    const nextEdits = new Map(photoEditsRef.current); nextEdits.delete(file);
+    photoEditsRef.current = nextEdits; setPhotoEdits(nextEdits);
+    setBatchFiles(remaining); setError('');
+    if (file === sourceFile || !sourceFile) {
+      loadedRef.current?.cleanup?.(); loadedRef.current = null;
+      setLoaded(null); setSourceFile(null); setSourceFileInfo(''); setRotation(0); setMeta(demoMeta);
+      if (remaining.length) await importFile(remaining[Math.min(index, remaining.length - 1)]);
+      else setStatus('等待导入照片');
+    }
+  };
 
   const chooseFile = () => { if (!busy) inputRef.current?.click(); };
 
@@ -1183,18 +1248,19 @@ export default function Home() {
   };
 
   const updateMeta = (key: keyof PhotoMeta, value: string) => {
-    setMeta((current) => ({ ...current, [key]: value }));
+    replacePhotoMeta({ ...meta, [key]: value });
   };
 
-  const exportPhoto = async (file: File, editedMeta?: PhotoMeta) => {
+  const exportPhoto = async (file: File, editedMeta?: PhotoMeta, photoRotation = rotation) => {
     const canvas = document.createElement('canvas');
     let image: LoadedImage | null = null;
     try {
       // Let the status update paint before decoding and rendering a large photo.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      await thumbnailTaskRef.current?.catch(() => undefined);
       const result = await readPhotoFile(file, false, exportMaxEdge);
       image = result.image;
-      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, false, customLensAsset, exportMaxEdge);
+      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, photoRotation, false, customLensAsset, exportMaxEdge);
       const width = canvas.width;
       const height = canvas.height;
       let blob = await canvasToBlob(canvas, exportFormat);
@@ -1257,7 +1323,8 @@ export default function Home() {
         const file = batchFiles[index];
         setStatus(`正在处理 ${index + 1}/${batchFiles.length} · ${file.name}`);
         try {
-          const blob = await exportPhoto(file);
+          const edit = photoEditsRef.current.get(file);
+          const blob = await exportPhoto(file, edit?.meta, edit?.rotation ?? 0);
           if (bytes + blob.size > batchMaxBytes) {
             remaining = batchFiles.length - index;
             remainingName = file.name;
@@ -1393,10 +1460,12 @@ export default function Home() {
           {batchFiles.length > 1 && (
             <div className="batch-summary">
               <div><strong>批量模式</strong><span>{batchFiles.length} 张</span></div>
-              <p>当前预览：{batchFiles[0].name}</p>
+              <p>当前预览：{sourceFile?.name ?? '请选择照片'}</p>
               <small>导出时逐张处理并打包为 ZIP；结果较大时会提示分批导入。</small>
             </div>
           )}
+
+          {batchFiles.length > 0 && <BatchPhotoList key={photoListVersion} files={batchFiles} selected={sourceFile} rotations={photoEdits} busy={busy} makeThumbnail={makePhotoThumbnail} onSelect={selectPhoto} onRemove={(file) => void removePhoto(file)} />}
 
           <div className="read-status">
             <span className={busy ? 'spinner' : 'status-icon'}>{busy ? '' : loaded ? '✓' : 'i'}</span>
@@ -1406,11 +1475,11 @@ export default function Home() {
 
           <label className="setting-label">照片旋转</label>
           <div className="segmented">
-            <button disabled={!loaded || busy} onClick={() => setRotation((v) => (v + 3) % 4)}>↶ 向左 90°</button>
-            <button disabled={!loaded || busy} onClick={() => setRotation((v) => (v + 1) % 4)}>向右 90° ↷</button>
-            <button disabled={!loaded || busy || rotation === 0} onClick={() => setRotation(0)}>复原</button>
+            <button disabled={!loaded || busy} onClick={() => setPhotoRotation((rotation + 3) % 4)}>↶ 向左 90°</button>
+            <button disabled={!loaded || busy} onClick={() => setPhotoRotation((rotation + 1) % 4)}>向右 90° ↷</button>
+            <button disabled={!loaded || busy || rotation === 0} onClick={() => setPhotoRotation(0)}>复原</button>
           </div>
-          <p className="setting-note">在自动转正基础上旋转照片，不旋转水印。{batchFiles.length > 1 && '批量导出时应用于全部照片。'}</p>
+          <p className="setting-note">在自动转正基础上旋转照片，不旋转水印。{batchFiles.length > 1 && '仅调整当前照片，切换后会保留各自的旋转。'}</p>
 
           <div className="panel-heading settings-heading">
             <div><span className="step">02</span><h2>水印设置</h2></div>
@@ -1594,11 +1663,12 @@ export default function Home() {
           </label>
           <p className="setting-note">{exportFormat === 'png' ? 'PNG 目前不写入 EXIF 拍摄信息。' : '仅保留原图已有的常用拍摄字段，不复制缩略图、序列号或厂商隐藏信息。手改水印不会更改原始记录。'}</p>
 
-          <button className="export-button" disabled={!loaded || busy || !iconsReady} onClick={download}>
+          <button className="export-button" disabled={(!loaded && batchFiles.length < 2) || busy || !iconsReady} onClick={download}>
             <span>{batchFiles.length > 1
               ? `批量导出 ${batchFiles.length} 张 ZIP`
               : exportFormat === 'png' ? '无损导出 PNG' : '高画质导出 JPG'}</span><b>→</b>
           </button>
+          {batchFiles.length > 1 && <button type="button" className="document-import-button" disabled={!loaded || busy || !iconsReady} onClick={() => void downloadSingle()}>仅导出当前照片 <span>{sourceFile?.name ?? '请选择照片'}</span></button>}
           </fieldset>
         </aside>
 
@@ -1644,7 +1714,7 @@ export default function Home() {
             <summary>拍摄参数<span>查看或修改自动读取的信息</span></summary>
           <div className="metadata-heading">
             <div><h2>拍摄参数</h2><span>自动读取后仍可手动修改</span></div>
-            <button onClick={() => setMeta(demoMeta)}>填入示例</button>
+            <button onClick={() => replacePhotoMeta(demoMeta)}>填入示例</button>
           </div>
           <div className="metadata-grid">
             {fields.map((field) => (

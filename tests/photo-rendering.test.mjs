@@ -11,18 +11,19 @@ const code = ts.transpileModule(page.slice(start, end), { compilerOptions: {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None,
 } }).outputText;
 
-function exporter(failAt, editedMeta) {
+function exporter(failAt, editedMeta, thumbnailTask = null) {
   const source = { name: 'camera.JPG' };
   const canvas = { width: 300, height: 150 };
   const image = { width: 6192, height: 4128, cleanup: () => { cleanupCount += 1; } };
   let cleanupCount = 0;
+  let decodeCount = 0;
   let metadataCount = 0;
   const fail = (stage) => { if (stage === failAt) throw new Error(stage); };
   const environment = {
     document: { createElement: () => canvas }, window: { setTimeout: (fn) => fn() },
     readPhotoFile: async (file, preview = false) => {
       assert.equal(file, source); assert.equal(preview, false);
-      fail('decode'); return { image, meta: { iso: 'ISO 400' } };
+      decodeCount += 1; fail('decode'); return { image, meta: { iso: 'ISO 400' } };
     },
     drawWatermark: (target, original, meta) => {
       assert.equal(original, image);
@@ -42,6 +43,7 @@ function exporter(failAt, editedMeta) {
       assert.equal(width, 6192); assert.equal(height, 4902);
       metadataCount += 1; fail('metadata'); return blob;
     },
+    thumbnailTaskRef: { current: thumbnailTask },
     exportFormat: 'jpeg', exportMaxEdge: 0, preserveExif: true, removeGps: true,
     theme: 'light', detailMode: 'full', watermarkHeight: 12.5, activeCameraAsset: null, customLensAsset: null,
     compactLensAsset: null, zoom18135LensAsset: null, signature: '', accentColor: '#ffffff',
@@ -49,7 +51,7 @@ function exporter(failAt, editedMeta) {
   };
   const keys = Object.keys(environment);
   const exportPhoto = new Function(...keys, `${code}\nreturn exportPhoto;`)(...keys.map((key) => environment[key]));
-  return { run: () => exportPhoto(source, editedMeta), canvas, counts: () => ({ cleanupCount, metadataCount }) };
+  return { decoded: () => decodeCount, run: () => exportPhoto(source, editedMeta), canvas, counts: () => ({ cleanupCount, metadataCount }) };
 }
 
 test('single export re-decodes the original and releases full-size rasters before EXIF writes', async () => {
@@ -67,3 +69,15 @@ for (const stage of ['decode', 'render', 'encode', 'metadata']) {
     assert.equal(fixture.counts().cleanupCount, stage === 'decode' ? 0 : 1);
   });
 }
+
+test('export waits for thumbnail decoding to finish before allocating a full image', async () => {
+  let finish;
+  const thumbnail = new Promise((resolve) => { finish = resolve; });
+  const fixture = exporter(undefined, undefined, thumbnail);
+  const output = fixture.run();
+  await Promise.resolve();
+  assert.equal(fixture.decoded(), 0);
+  finish('small thumbnail');
+  await output;
+  assert.equal(fixture.decoded(), 1);
+});
