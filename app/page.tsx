@@ -5,6 +5,7 @@ import { CustomIcons, IconCropSource, IconKind, customIconsStorageKey, fitArtwor
 import JSZip from 'jszip';
 import IconCropDialog from './icon-crop-dialog';
 import { autoColorFilter } from './auto-color';
+import CloudBeauty from './cloud-beauty-panel';
 import BatchPhotoList from './batch-photo-list';
 import { GearArtwork, gearGallery } from './gear-gallery';
 import { attachJpegExif, rotationSize } from './photo-export';
@@ -977,6 +978,8 @@ export default function Home() {
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [photoEdits, setPhotoEdits] = useState(new Map<File, { rotation: number; meta?: PhotoMeta }>());
   const photoEditsRef = useRef(photoEdits);
+  const cloudEditsRef = useRef(new Map<File, File>());
+  const [cloudEdits, setCloudEdits] = useState(new Map<File, File>());
   const thumbnailTaskRef = useRef<Promise<string> | null>(null);
   const [photoListVersion, setPhotoListVersion] = useState(0);
   const [cameraAsset, setCameraAsset] = useState<HTMLImageElement | null>(null);
@@ -1126,6 +1129,8 @@ export default function Home() {
       await thumbnailTaskRef.current?.catch(() => undefined);
       const result = await readPhotoFile(file, true);
       nextImage = result.image;
+      const cloud = cloudEditsRef.current.get(file);
+      if (cloud) { nextImage.cleanup?.(); nextImage = null; nextImage = (await readPhotoFile(cloud, true)).image; nextImage.name = file.name; }
 
       loadedRef.current?.cleanup?.();
       loadedRef.current = nextImage;
@@ -1166,12 +1171,39 @@ export default function Home() {
     }
     loadedRef.current?.cleanup?.(); loadedRef.current = null;
     setLoaded(null); setSourceFile(null); setSourceFileInfo(''); setRotation(0); setMeta(demoMeta);
+    cloudEditsRef.current = new Map(); setCloudEdits(new Map());
     const edits = new Map<File, { rotation: number; meta?: PhotoMeta }>();
     photoEditsRef.current = edits; setPhotoEdits(edits);
     setPhotoListVersion((value) => value + 1);
     setBatchFiles(photos);
     await importFile(photos[0]);
   }, [importFile]);
+
+  const prepareCloudPhoto = async () => {
+    if (!sourceFile) throw new Error('请先导入照片。');
+    await thumbnailTaskRef.current?.catch(() => undefined);
+    const { image } = await readPhotoFile(sourceFile, false, 1536);
+    const canvas = document.createElement('canvas');
+    try {
+      const size = fitLongEdge(image.width, image.height, 1536);
+      canvas.width = size.width; canvas.height = size.height;
+      const ctx = canvas.getContext('2d'); if (!ctx) throw new Error('无法准备照片');
+      ctx.drawImage(image.source, 0, 0, size.width, size.height);
+      return await canvasToBlob(canvas, 'png');
+    } finally { image.cleanup?.(); releaseCanvas(canvas); }
+  };
+  const applyCloudPhoto = async (result: File | null) => {
+    if (!sourceFile) throw new Error('请先导入照片。');
+    const next = new Map(cloudEditsRef.current);
+    if (result) next.set(sourceFile, result); else next.delete(sourceFile);
+    if ([...next.values()].reduce((sum, item) => sum + item.size, 0) > 64 * 1024 * 1024) throw new Error('本批 AI 图片已达到 64 MB，请先导出或减少照片。');
+    await thumbnailTaskRef.current?.catch(() => undefined);
+    const { image } = await readPhotoFile(result ?? sourceFile, true);
+    image.name = sourceFile.name;
+    loadedRef.current?.cleanup?.(); loadedRef.current = image; setLoaded(image);
+    cloudEditsRef.current = next; setCloudEdits(next);
+    setStatus(result ? '已应用 AI 结果 · 拍摄参数保留原始记录' : '已恢复原图');
+  };
 
   const makePhotoThumbnail = useCallback((file: File, signal: AbortSignal) => {
     const previous = thumbnailTaskRef.current;
@@ -1213,6 +1245,7 @@ export default function Home() {
   const selectPhoto = (file: File) => { if (!busy && file !== sourceFile) void importFile(file); };
   const removePhoto = async (file: File) => {
     if (busy) return;
+    const cloudNext = new Map(cloudEditsRef.current); cloudNext.delete(file); cloudEditsRef.current = cloudNext; setCloudEdits(cloudNext);
     const index = batchFiles.indexOf(file);
     const remaining = batchFiles.filter((item) => item !== file);
     const nextEdits = new Map(photoEditsRef.current); nextEdits.delete(file);
@@ -1262,9 +1295,11 @@ export default function Home() {
       // Let the status update paint before decoding and rendering a large photo.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       await thumbnailTaskRef.current?.catch(() => undefined);
-      const result = await readPhotoFile(file, false, exportMaxEdge);
+      const cloud = cloudEditsRef.current.get(file);
+      const result = await readPhotoFile(cloud ?? file, false, exportMaxEdge);
       image = result.image;
-      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, photoRotation, false, customLensAsset, exportMaxEdge, colorStrength);
+      const outputMeta = editedMeta ?? (cloud ? metadataFromExif(await parsePhotoExif(file)) : result.meta);
+      drawWatermark(canvas, image, outputMeta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, photoRotation, false, customLensAsset, exportMaxEdge, colorStrength);
       const width = canvas.width;
       const height = canvas.height;
       let blob = await canvasToBlob(canvas, exportFormat);
@@ -1417,9 +1452,9 @@ export default function Home() {
         <div className="brand-mark"><span className="record-dot" />ZE10</div>
         <div className="topbar-copy">
           <strong>ZV-E10 II 专属水印工坊</strong>
-          <span>照片仅在本机处理，不会上传</span>
+          <span>默认本地处理；云端 AI 仅在确认发送后上传</span>
         </div>
-        <div className="privacy-pill"><span>●</span> 本地模式</div>
+        <div className="privacy-pill"><span>●</span> 本地处理 / 可选云端 AI</div>
       </header>
 
       <section className="hero">
@@ -1477,6 +1512,8 @@ export default function Home() {
           </div>
           {error && <p className="error-message">{error}</p>}
 
+          <CloudBeauty file={sourceFile} busy={busy} applied={!!sourceFile && cloudEdits.has(sourceFile)} setBusy={setBusy} prepare={prepareCloudPhoto} apply={applyCloudPhoto} />
+          {sourceFile && cloudEdits.has(sourceFile) && <p className="setting-note">当前照片已应用 AI 美化，预览及导出使用结果图；列表缩略图仍显示原图。</p>}
           <label className="setting-label" htmlFor="auto-color">本地自动调色 · {colorStrength === 0 ? '关闭' : colorStrength + '%'}</label>
           <input id="auto-color" type="range" min="0" max="100" step="5" value={colorStrength} disabled={busy} onChange={(event) => setColorStrength(Number(event.target.value))} style={{ width: '100%' }} />
           <div className="segmented"><button disabled={busy} onClick={() => setColorStrength(60)}>自然优化</button><button disabled={busy} onClick={() => setColorStrength(0)}>恢复原色</button></div>

@@ -10,7 +10,8 @@
     "build": "vinext build",
     "build:pages": "vite build --config vite.pages.config.ts",
     "start": "vinext start",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern pages-dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern pages-dist --ignore-pattern .next",
+    "start:cloud": "node scripts/cloud-local-server.mjs"
   },
   "dependencies": {
     "exifr": "7.1.3",
@@ -40,4 +41,3 @@
   },
   "type": "module"
 }
-
