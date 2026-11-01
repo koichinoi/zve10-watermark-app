@@ -49,4 +49,4 @@ pnpm run start
 
 ## 图库素材
 
-新增产品照片来源及原图地址见 [public/gear/SOURCES.md](public/gear/SOURCES.md)。素材随应用提供，选择和导出时无需访问第三方图片服务；产品照片保留原有背景。
+新增产品照片来源及原图地址见 [public/gear/SOURCES.md](public/gear/SOURCES.md)。素材随应用提供，选择和导出时无需访问第三方图片服务；镜头图库使用透明背景，相机图片保留原有背景。
