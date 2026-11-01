@@ -11,8 +11,9 @@ const code = ts.transpileModule(page.slice(start, end), { compilerOptions: {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None,
 } }).outputText;
 
-function exporter(failAt, editedMeta, thumbnailTask = null) {
+function exporter(failAt, editedMeta, thumbnailTask = null, cloud = false) {
   const source = { name: 'camera.JPG' };
+  const generated = { name: 'cloud.png' };
   const canvas = { width: 300, height: 150 };
   const image = { width: 6192, height: 4128, cleanup: () => { cleanupCount += 1; } };
   let cleanupCount = 0;
@@ -22,8 +23,8 @@ function exporter(failAt, editedMeta, thumbnailTask = null) {
   const environment = {
     document: { createElement: () => canvas }, window: { setTimeout: (fn) => fn() },
     readPhotoFile: async (file, preview = false) => {
-      assert.equal(file, source); assert.equal(preview, false);
-      decodeCount += 1; fail('decode'); return { image, meta: { iso: 'ISO 400' } };
+      assert.equal(file, cloud ? generated : source); assert.equal(preview, false);
+      decodeCount += 1; fail('decode'); return { image, meta: { iso: cloud ? 'missing' : 'ISO 400' } };
     },
     drawWatermark: (target, original, meta) => {
       assert.equal(original, image);
@@ -43,7 +44,8 @@ function exporter(failAt, editedMeta, thumbnailTask = null) {
       assert.equal(width, 6192); assert.equal(height, 4902);
       metadataCount += 1; fail('metadata'); return blob;
     },
-    thumbnailTaskRef: { current: thumbnailTask },
+    parsePhotoExif: async (file) => { assert.equal(file, source); return { iso: 'ISO 400' }; }, metadataFromExif: (value) => value,
+    cloudEditsRef: { current: cloud ? new Map([[source, generated]]) : new Map() }, thumbnailTaskRef: { current: thumbnailTask },
     colorStrength: 0, exportFormat: 'jpeg', exportMaxEdge: 0, preserveExif: true, removeGps: true,
     theme: 'light', detailMode: 'full', watermarkHeight: 12.5, activeCameraAsset: null, customLensAsset: null,
     compactLensAsset: null, zoom18135LensAsset: null, signature: '', accentColor: '#ffffff',
@@ -80,4 +82,10 @@ test('export waits for thumbnail decoding to finish before allocating a full ima
   finish('small thumbnail');
   await output;
   assert.equal(fixture.decoded(), 1);
+});
+
+test('AI export renders generated image while recovering metadata from original source', async () => {
+  const fixture = exporter(undefined, undefined, null, true);
+  assert.equal(await (await fixture.run()).text(), 'encoded');
+  assert.deepEqual(fixture.counts(), { cleanupCount: 1, metadataCount: 1 });
 });
