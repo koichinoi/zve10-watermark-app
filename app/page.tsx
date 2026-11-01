@@ -4,6 +4,7 @@ import exifr from 'exifr';
 import { CustomIcons, IconCropSource, IconKind, customIconsStorageKey, fitArtwork, loadIconForCropping, readCustomIcons, restoreCustomIcon } from './custom-icons';
 import JSZip from 'jszip';
 import IconCropDialog from './icon-crop-dialog';
+import { autoColorFilter } from './auto-color';
 import BatchPhotoList from './batch-photo-list';
 import { GearArtwork, gearGallery } from './gear-gallery';
 import { attachJpegExif, rotationSize } from './photo-export';
@@ -761,6 +762,7 @@ function drawWatermark(
   preview = false,
   customLensAsset: HTMLImageElement | null = null,
   maxEdge = 0,
+  colorStrength = 0,
 ) {
   const original = image;
   image = { ...image, ...rotationSize(image.width, image.height, rotation) };
@@ -782,6 +784,7 @@ function drawWatermark(
   ctx.save();
   ctx.translate(width / 2, image.height / 2);
   ctx.rotate(rotation * Math.PI / 2);
+  ctx.filter = autoColorFilter(original.source, colorStrength);
   ctx.drawImage(original.source, -original.width / 2, -original.height / 2, original.width, original.height);
   ctx.restore();
   drawHolidayWatermark(ctx, width, image.height, scaleBase, holidayId);
@@ -995,6 +998,7 @@ export default function Home() {
   const [error, setError] = useState('');
   const [sourceFileInfo, setSourceFileInfo] = useState('');
   const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [colorStrength, setColorStrength] = useState(0);
   const [rotation, setRotation] = useState(0);
   const [preserveExif, setPreserveExif] = useState(true);
   const [removeGps, setRemoveGps] = useState(true);
@@ -1021,14 +1025,14 @@ export default function Home() {
     if (loaded && canvasRef.current) {
       const frame = window.requestAnimationFrame(() => {
         try {
-          if (canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, true, customLensAsset);
+          if (canvasRef.current) drawWatermark(canvasRef.current, loaded, meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, true, customLensAsset, 0, colorStrength);
         } catch (reason) {
           setError(reason instanceof Error ? reason.message : '预览生成失败');
         }
       });
       return () => window.cancelAnimationFrame(frame);
     }
-  }, [loaded, meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, customLensAsset]);
+  }, [loaded, meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, rotation, customLensAsset, colorStrength]);
 
   useEffect(() => {
     let active = true;
@@ -1260,7 +1264,7 @@ export default function Home() {
       await thumbnailTaskRef.current?.catch(() => undefined);
       const result = await readPhotoFile(file, false, exportMaxEdge);
       image = result.image;
-      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, photoRotation, false, customLensAsset, exportMaxEdge);
+      drawWatermark(canvas, image, editedMeta ?? result.meta, theme, detailMode, watermarkHeight, activeCameraAsset, compactLensAsset, zoom18135LensAsset, signature, accentColor, lensImageEnabled, holidayId, layoutMode, parameterVisibility, photoRotation, false, customLensAsset, exportMaxEdge, colorStrength);
       const width = canvas.width;
       const height = canvas.height;
       let blob = await canvasToBlob(canvas, exportFormat);
@@ -1473,6 +1477,10 @@ export default function Home() {
           </div>
           {error && <p className="error-message">{error}</p>}
 
+          <label className="setting-label" htmlFor="auto-color">本地自动调色 · {colorStrength === 0 ? '关闭' : colorStrength + '%'}</label>
+          <input id="auto-color" type="range" min="0" max="100" step="5" value={colorStrength} disabled={busy} onChange={(event) => setColorStrength(Number(event.target.value))} style={{ width: '100%' }} />
+          <div className="segmented"><button disabled={busy} onClick={() => setColorStrength(60)}>自然优化</button><button disabled={busy} onClick={() => setColorStrength(0)}>恢复原色</button></div>
+          <p className="setting-note">根据每张照片亮度轻调曝光、对比度和饱和度。所有照片共用强度，预览与导出同步；照片不上传。</p>
           <label className="setting-label">照片旋转</label>
           <div className="segmented">
             <button disabled={!loaded || busy} onClick={() => setPhotoRotation((rotation + 3) % 4)}>↶ 向左 90°</button>
