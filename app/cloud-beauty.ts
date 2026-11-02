@@ -10,6 +10,12 @@ export function cloudBase(value: string, pageUrl: string): string {
 export function beautyPrompt(style: string, strength: string): string {
   return `对上传的照片进行${strength}程度的${style}修饰。改善曝光、白平衡、肤色和自然细节，保留皮肤纹理。严格保持人物身份、五官、体型、服装、背景、构图、方向及长宽比，不增加或删除物体，不瘦脸、不放大眼睛、不添加文字或水印。输出修饰后的照片。`;
 }
+export function customEditPrompt(instruction: string): string {
+  const text = instruction.trim();
+  if (!text) throw new Error('请先输入修改要求。');
+  if (text.length > 2000) throw new Error('修改要求最多 2000 字。');
+  return '请按下面的本次要求编辑上传的照片。未被要求修改的人物身份、五官、服装、背景和构图保持不变，尽量保留真实细节。除非明确要求，否则不要添加文字、水印或改变长宽比。只输出修改后的图片。\n本次要求：\n' + text;
+}
 export async function limitedBlob(response: Response, maxBytes = 32 * 1024 * 1024): Promise<Blob> {
   if (!response.body) throw new Error('接口返回为空。');
   if (Number(response.headers.get('content-length')) > maxBytes) throw new Error('接口结果过大，请降低生成尺寸。');

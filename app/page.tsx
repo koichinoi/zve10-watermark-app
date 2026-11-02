@@ -1179,10 +1179,10 @@ export default function Home() {
     await importFile(photos[0]);
   }, [importFile]);
 
-  const prepareCloudPhoto = async () => {
+  const prepareCloudPhoto = async (input?: File) => {
     if (!sourceFile) throw new Error('请先导入照片。');
     await thumbnailTaskRef.current?.catch(() => undefined);
-    const { image } = await readPhotoFile(sourceFile, false, 1536);
+    const { image } = await readPhotoFile(input ?? sourceFile, false, 1536);
     const canvas = document.createElement('canvas');
     try {
       const size = fitLongEdge(image.width, image.height, 1536);
@@ -1512,7 +1512,7 @@ export default function Home() {
           </div>
           {error && <p className="error-message">{error}</p>}
 
-          <CloudBeauty file={sourceFile} busy={busy} applied={!!sourceFile && cloudEdits.has(sourceFile)} setBusy={setBusy} prepare={prepareCloudPhoto} apply={applyCloudPhoto} />
+          <CloudBeauty file={sourceFile} appliedFile={sourceFile ? cloudEdits.get(sourceFile) : undefined} busy={busy} applied={!!sourceFile && cloudEdits.has(sourceFile)} setBusy={setBusy} prepare={prepareCloudPhoto} apply={applyCloudPhoto} />
           {sourceFile && cloudEdits.has(sourceFile) && <p className="setting-note">当前照片已应用 AI 美化，预览及导出使用结果图；列表缩略图仍显示原图。</p>}
           <label className="setting-label" htmlFor="auto-color">本地自动调色 · {colorStrength === 0 ? '关闭' : colorStrength + '%'}</label>
           <input id="auto-color" type="range" min="0" max="100" step="5" value={colorStrength} disabled={busy} onChange={(event) => setColorStrength(Number(event.target.value))} style={{ width: '100%' }} />

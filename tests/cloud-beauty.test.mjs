@@ -22,3 +22,11 @@ test('bounded response stops oversized streaming bodies', async () => {
   await assert.rejects(()=>exports.limitedBlob(new Response('0123456789'),5));
   assert.equal(await (await exports.limitedBlob(new Response('ok'),5)).text(),'ok');
 });
+
+test('custom edits keep exact user instructions without automatic beauty constraints', () => {
+  const prompt=exports.customEditPrompt('  把背景变成蓝色\n保留人物  ');
+  assert.ok(prompt.endsWith('把背景变成蓝色\n保留人物'));
+  assert.ok(!prompt.includes('不增加或删除物体'));
+  assert.throws(()=>exports.customEditPrompt('  '));
+  assert.throws(()=>exports.customEditPrompt('字'.repeat(2001)));
+});
